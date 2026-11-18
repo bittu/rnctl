@@ -21,7 +21,7 @@ export interface Daemon {
 
 export function createDaemon(logger: Logger = defaultLogger): Daemon {
   const bus = new TypedEventBus();
-  const processes = new ProcessSupervisor();
+  const processes = new ProcessSupervisor((topic, payload) => { void bus.emit(topic, payload); });
   const rpcMethods = new Map<string, unknown>();
   const commands = new Map<string, unknown>();
 

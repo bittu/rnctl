@@ -50,12 +50,27 @@ export interface ProcessHandle {
 export interface ExecResult {
   stdout: string;
   stderr: string;
+  exitCode: number;
+}
+
+/** Payload of the `process:stdout` and `process:stderr` events. */
+export interface ProcessOutput {
+  id: string;
+  chunk: string;
+}
+
+/** Payload of the `process:exit` event. */
+export interface ProcessExit {
+  id: string;
+  code: number | null;
+  signal: string | null;
 }
 
 /** Process gateway for plugins; plugins must never import node:child_process. */
 export interface Processes {
   spawn(id: string, command: string, args?: string[], options?: SpawnOptions): Promise<ProcessHandle>;
   exec(command: string, args?: string[], options?: SpawnOptions): Promise<ExecResult>;
+  stop(id: string, signal?: string): Promise<void>;
 }
 
 export interface RpcMethod<TInput = unknown, TOutput = unknown> {
