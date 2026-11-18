@@ -34,10 +34,10 @@ interface DeviceGroup { platform: Platform; devices: DeviceInfo[] }
 
 const MAX_LOGS = 200;
 const SCREENS: ReadonlyArray<{ id: ScreenId; label: string; key: string }> = [
-  { id: 'devices', label: 'DEVICES', key: '1' },
-  { id: 'logs', label: 'LOGS', key: '2' },
-  { id: 'metro', label: 'METRO', key: '3' },
-  { id: 'environment', label: 'ENVIRONMENT', key: '4' },
+  { id: 'devices', label: 'Devices', key: '1' },
+  { id: 'logs', label: 'Logs', key: '2' },
+  { id: 'metro', label: 'Metro', key: '3' },
+  { id: 'environment', label: 'Environment', key: '4' },
 ];
 
 /** Flat, neutral near-black palette: every surface is a shade of grey, not blue. */
@@ -52,6 +52,7 @@ const C = {
   surface: '#111113',
   content: '#0d0d0f',
   selected: '#1c1c20',
+  separator: '#1f1f23',
   warnBg: '#1a1508',
 } as const;
 
@@ -145,7 +146,7 @@ function deviceRow(device: DeviceInfo, active: boolean, onSelect: (id: string) =
     },
     t(active ? '▸' : ' ', { fg: active ? C.accent : C.muted }),
     t(booted ? '●' : '○', { fg: booted ? C.good : C.muted }),
-    t(cut(device.name, 40), { bold: active, grow: true, truncate: true }),
+    t(cut(device.name, 12), { bold: active, grow: true, truncate: true }),
     t(device.platform === 'ios' ? 'iOS' : 'AND', { fg: active ? C.accent : C.muted }),
     t(device.state, { fg: booted ? C.good : C.muted }),
   );
@@ -190,8 +191,8 @@ function DeviceActions({ device, onReload, onMenu, onStart, onStop }: {
   if (!device) {
     return createElement(
       'box',
-      { width: 34, flexShrink: 0, backgroundColor: C.surface, paddingX: 2, paddingY: 1, overflow: 'hidden' },
-      t('ACTIONS', { bold: true }),
+      { width: 24, flexShrink: 0, backgroundColor: C.surface, paddingX: 1, paddingY: 1, overflow: 'hidden' },
+      t('Actions', { bold: true }),
       t('Select a device to see actions.', { fg: C.muted, dim: true }),
     );
   }
@@ -199,29 +200,23 @@ function DeviceActions({ device, onReload, onMenu, onStart, onStop }: {
   return createElement(
     'box',
     {
-      width: 34,
+      width: 24,
       flexShrink: 0,
       backgroundColor: C.surface,
-      paddingX: 2,
+      paddingX: 1,
       paddingY: 1,
       flexDirection: 'column',
-      gap: 1,
       overflow: 'hidden',
     },
-    t(`ACTIONS · ${cut(device.name, 19)}`, { bold: true, truncate: true }),
-    t(cut(device.id, 30), { fg: C.muted, dim: true, truncate: true }),
+    t(`Actions · ${cut(device.name, 15)}`, { bold: true, truncate: true }),
     // shortcut: boot/shutdown/install/run have no RPC yet; wire them here when plugin-devices adds them.
-    disabledAction(booted ? 'SHUTDOWN' : 'BOOT / START', 'pending RPC'),
-    disabledAction('INSTALL APP', 'pending RPC'),
-    disabledAction('RUN APP', 'pending RPC'),
-    wiredAction('JS RELOAD', 'accent', onReload),
-    wiredAction('DEV MENU', 'warn', onMenu),
-    createElement(
-      'box',
-      { flexDirection: 'row', gap: 1, flexShrink: 0 },
-      wiredAction('METRO START', 'good', onStart, true),
-      wiredAction('STOP', 'bad', onStop, true),
-    ),
+    disabledAction(booted ? 'Shutdown' : 'Boot', 'pending'),
+    disabledAction('Install', 'pending'),
+    disabledAction('Run app', 'pending'),
+    wiredAction('JS reload', 'accent', onReload),
+    wiredAction('Dev menu', 'warn', onMenu),
+    wiredAction('Metro start', 'good', onStart),
+    wiredAction('Stop', 'bad', onStop),
   );
 }
 
@@ -235,7 +230,7 @@ function DevicesScreen({ groups, selectedId, scrollRef, onSelect, actions }: {
   const total = groups.reduce((sum, group) => sum + group.devices.length, 0);
   const booted = groups.reduce((sum, group) => sum + group.devices.filter((device) => device.state === 'booted').length, 0);
   return panel(
-    'DEVICES',
+    'Devices',
     `${total} shown · ${booted} booted`,
     createElement(
       'box',
@@ -262,7 +257,7 @@ function logTone(level: LogEntry['level']): Tone {
 
 function LogsScreen({ entries }: { entries: LogEntry[] }): ReactNode {
   return panel(
-    'LIVE LOGS',
+    'Live logs',
     `${entries.length} entries`,
     createElement(
       'scrollbox',
@@ -309,7 +304,7 @@ function MetroScreen({ metro, onStart, onStop, onReload, onMenu }: {
   const tone: Tone = metro.status === 'running' ? 'good' : metro.status === 'stopped' ? 'bad' : 'warn';
   const glyph = metro.status === 'running' ? '●' : metro.status === 'stopped' ? '○' : '◐';
   return panel(
-    'METRO',
+    'Metro',
     metro.status,
     createElement(
       'scrollbox',
@@ -327,10 +322,10 @@ function MetroScreen({ metro, onStart, onStop, onReload, onMenu }: {
         createElement(
           'box',
           { flexDirection: 'row', gap: 1, flexShrink: 0 },
-          metroAction('START', 'good', onStart),
-          metroAction('STOP', 'bad', onStop),
-          metroAction('RELOAD', 'accent', onReload),
-          metroAction('DEV MENU', 'warn', onMenu),
+          metroAction('Start', 'good', onStart),
+          metroAction('Stop', 'bad', onStop),
+          metroAction('Reload', 'accent', onReload),
+          metroAction('Dev menu', 'warn', onMenu),
         ),
         t('Click an action, or use s / x / r / d.', { fg: C.muted, dim: true }),
       ),
@@ -341,7 +336,7 @@ function MetroScreen({ metro, onStart, onStop, onReload, onMenu }: {
 function EnvironmentScreen({ health }: { health: HealthCheck[] | undefined }): ReactNode {
   const ok = health?.filter((check) => check.ok).length ?? 0;
   return panel(
-    'ENVIRONMENT',
+    'Environment',
     health ? `${ok}/${health.length} ok` : 'checking…',
     createElement(
       'scrollbox',
@@ -400,27 +395,24 @@ function SideMenu({ active, filter, counts, onScreen, onFilter }: {
         onMouseUp: () => { onFilter(platform); onScreen('devices'); },
       },
       t(isActive ? '›' : '·', { fg: isActive ? C.accent : C.muted }),
-      t(`${label} (${counts[platform]})`, { fg: isActive ? C.accent : C.muted, truncate: true }),
+      t(`${label} ${counts[platform]}`, { fg: isActive ? C.accent : C.muted, truncate: true }),
     );
   };
   return createElement(
     'box',
     {
-      width: 22,
+      width: 16,
       flexShrink: 0,
-      flexGrow: 1,
-      backgroundColor: C.surface,
-      paddingX: 1,
       paddingY: 1,
       flexDirection: 'column',
       overflow: 'hidden',
     },
-    entry('devices', 'DEVICES', '1'),
+    entry('devices', 'Devices', '1'),
     subEntry('ios', 'iOS'),
     subEntry('android', 'Android'),
-    entry('logs', 'LOGS', '2'),
-    entry('metro', 'METRO', '3'),
-    entry('environment', 'ENVIRONMENT', '4'),
+    entry('logs', 'Logs', '2'),
+    entry('metro', 'Metro', '3'),
+    entry('environment', 'Environment', '4'),
   );
 }
 
@@ -652,7 +644,7 @@ function Dashboard({ client }: { client: RpcClient }) {
       : null,
     createElement(
       'box',
-      { flexGrow: 1, flexBasis: 0, minHeight: 0, flexDirection: 'row', gap: 1, overflow: 'hidden' },
+      { flexGrow: 1, flexBasis: 0, minHeight: 0, flexDirection: 'row', overflow: 'hidden' },
       createElement(SideMenu, {
         active,
         filter,
@@ -660,7 +652,8 @@ function Dashboard({ client }: { client: RpcClient }) {
         onScreen: setActive,
         onFilter: setFilter,
       }),
-      createElement('box', { flexGrow: 1, flexBasis: 0, minHeight: 0, backgroundColor: C.content, overflow: 'hidden' }, screen),
+      createElement('box', { width: 1, flexShrink: 0, backgroundColor: C.separator }),
+      createElement('box', { flexGrow: 1, flexBasis: 0, minHeight: 0, backgroundColor: C.content, paddingLeft: 1, overflow: 'hidden' }, screen),
     ),
     createElement(
       'box',
