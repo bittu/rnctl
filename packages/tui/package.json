@@ -1,0 +1,39 @@
+{
+  "name": "@rnctl/tui",
+  "version": "0.1.0",
+  "description": "Ink terminal dashboard for rnctl",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "ink": "^8.0.0",
+    "react": "^19.3.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bittu/rnctl.git"
+  },
+  "homepage": "https://github.com/bittu/rnctl#readme",
+  "engines": {
+    "node": ">=20"
+  }
+}

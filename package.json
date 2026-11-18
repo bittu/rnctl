@@ -1,0 +1,24 @@
+{
+  "name": "rnctl-monorepo",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.20.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "dev": "turbo run dev",
+    "clean": "turbo run clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "tsdown": "^0.23.7",
+    "turbo": "^2.11.13",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  }
+}
