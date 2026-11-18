@@ -1,4 +1,4 @@
-import type { Logger, PluginContext } from '@rnctl/sdk';
+import type { CommandDefinition, Logger, PluginContext, RpcMethod } from '@rnctl/sdk';
 import { TypedEventBus } from './event-bus.js';
 import { PluginLoader } from './plugin-loader.js';
 import { ProcessSupervisor } from './process-supervisor.js';
@@ -15,6 +15,8 @@ const defaultLogger: Logger = {
 export interface Daemon {
   readonly ctx: PluginContext;
   readonly loader: PluginLoader;
+  commands(): readonly CommandDefinition[];
+  rpcMethods(): ReadonlyMap<string, RpcMethod>;
   start(): Promise<void>;
   stop(): Promise<void>;
 }
@@ -38,7 +40,9 @@ export function createDaemon(logger: Logger = defaultLogger): Daemon {
   return {
     ctx,
     loader,
-    // shortcut: IPC/WebSocket transport is not wired until Phase 1.
+    commands: () => [...commands.values()] as CommandDefinition[],
+    rpcMethods: () => rpcMethods as ReadonlyMap<string, RpcMethod>,
+    // shortcut: IPC/WebSocket transport is not wired yet; RPC methods are in-process.
     async start() {},
     async stop() {
       await loader.unloadAll();

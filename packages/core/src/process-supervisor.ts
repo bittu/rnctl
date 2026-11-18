@@ -41,6 +41,7 @@ export class ProcessSupervisor implements Processes {
     child.once('error', () => {
       this.handles.delete(id);
     });
+    child.unref();
 
     return { id, pid: child.pid };
   }
