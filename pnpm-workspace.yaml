@@ -16,3 +16,13 @@ minimumReleaseAgeExclude:
   - '@vitest/spy@5.1.1'
   - turbo@2.11.13
   - vitest@5.1.1
+  - '@opentui/core-darwin-arm64@0.9.3'
+  - '@opentui/core-darwin-x64@0.9.3'
+  - '@opentui/core-linux-arm64-musl@0.9.3'
+  - '@opentui/core-linux-arm64@0.9.3'
+  - '@opentui/core-linux-x64-musl@0.9.3'
+  - '@opentui/core-linux-x64@0.9.3'
+  - '@opentui/core-win32-arm64@0.9.3'
+  - '@opentui/core-win32-x64@0.9.3'
+  - '@opentui/core@0.9.3'
+  - '@opentui/react@0.9.3'

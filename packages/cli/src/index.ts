@@ -66,7 +66,11 @@ async function main(): Promise<void> {
       await daemon.start();
       const client = await RpcClient.connect(daemon.port());
       await client.call('metro.start', { resetCache: false });
-      await renderDashboard(client);
+      try {
+        await renderDashboard(client);
+      } finally {
+        await daemon.stop();
+      }
     });
   // shortcut: the logs command will stream via logs.list once live tailing lands.
   program
@@ -77,7 +81,11 @@ async function main(): Promise<void> {
 
   program.action(async () => {
     await daemon.start();
-    await renderDashboard();
+    try {
+      await renderDashboard();
+    } finally {
+      await daemon.stop();
+    }
   });
 
   const shutdown = (): void => {
