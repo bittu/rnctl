@@ -56,12 +56,6 @@ const C = {
   warnBg: '#1a1508',
 } as const;
 
-/** Static wordmark: lives in the header permanently, never animates. */
-const LOGO = [
-  ' █▀▀█ █▀▄█ █▀▀▀ █████ █    ',
-  ' █▄▀█ █ ▀█ █▄▄▄   █   █▄▄▄▄',
-].join('\n');
-
 const BOLD = createTextAttributes({ bold: true });
 const DIM = createTextAttributes({ dim: true });
 
@@ -77,13 +71,24 @@ function reasonText(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason);
 }
 
-function t(content: string, opts: { fg?: string; bold?: boolean; dim?: boolean; truncate?: boolean; grow?: boolean } = {}): ReactNode {
+function t(content: string, opts: {
+  fg?: string;
+  bold?: boolean;
+  dim?: boolean;
+  truncate?: boolean;
+  grow?: boolean;
+  width?: number | `${number}%`;
+  shrink?: boolean;
+} = {}): ReactNode {
   return createElement('text', {
     content,
+    height: 1,
     fg: opts.fg ?? C.text,
     attributes: opts.bold ? BOLD : opts.dim ? DIM : undefined,
     truncate: opts.truncate,
+    width: opts.width,
     flexGrow: opts.grow ? 1 : undefined,
+    flexShrink: opts.shrink ? 0 : undefined,
     minWidth: opts.grow ? 0 : undefined,
   });
 }
@@ -129,7 +134,7 @@ function deviceGroups(devices: DeviceInfo[]): DeviceGroup[] {
     });
 }
 
-function deviceRow(device: DeviceInfo, active: boolean, onSelect: (id: string) => void): ReactNode {
+function deviceRow(device: DeviceInfo, active: boolean, nameWidth: number, onSelect: (id: string) => void): ReactNode {
   const booted = device.state === 'booted';
   return createElement(
     'box',
@@ -144,11 +149,10 @@ function deviceRow(device: DeviceInfo, active: boolean, onSelect: (id: string) =
       backgroundColor: active ? C.selected : undefined,
       onMouseUp: () => onSelect(device.id),
     },
-    t(active ? '▸' : ' ', { fg: active ? C.accent : C.muted }),
-    t(booted ? '●' : '○', { fg: booted ? C.good : C.muted }),
-    t(cut(device.name, 12), { bold: active, grow: true, truncate: true }),
-    t(device.platform === 'ios' ? 'iOS' : 'AND', { fg: active ? C.accent : C.muted }),
-    t(device.state, { fg: booted ? C.good : C.muted }),
+    t(active ? '▸' : ' ', { fg: active ? C.accent : C.muted, shrink: true }),
+    t(booted ? '●' : '○', { fg: booted ? C.good : C.muted, shrink: true }),
+    t(cut(device.name, nameWidth), { bold: active }),
+    t(device.platform === 'ios' ? 'iOS' : 'AND', { fg: active ? C.accent : C.muted, shrink: true }),
   );
 }
 
@@ -191,7 +195,7 @@ function DeviceActions({ device, onReload, onMenu, onStart, onStop }: {
   if (!device) {
     return createElement(
       'box',
-      { width: 24, flexShrink: 0, backgroundColor: C.surface, paddingX: 1, paddingY: 1, overflow: 'hidden' },
+      { width: 28, flexShrink: 0, backgroundColor: C.surface, paddingX: 1, paddingY: 1, overflow: 'hidden' },
       t('Actions', { bold: true }),
       t('Select a device to see actions.', { fg: C.muted, dim: true }),
     );
@@ -200,7 +204,7 @@ function DeviceActions({ device, onReload, onMenu, onStart, onStop }: {
   return createElement(
     'box',
     {
-      width: 24,
+      width: 28,
       flexShrink: 0,
       backgroundColor: C.surface,
       paddingX: 1,
@@ -208,7 +212,8 @@ function DeviceActions({ device, onReload, onMenu, onStart, onStop }: {
       flexDirection: 'column',
       overflow: 'hidden',
     },
-    t(`Actions · ${cut(device.name, 15)}`, { bold: true, truncate: true }),
+    t('Actions', { bold: true }),
+    t(cut(device.name, 26), { fg: C.muted }),
     // shortcut: boot/shutdown/install/run have no RPC yet; wire them here when plugin-devices adds them.
     disabledAction(booted ? 'Shutdown' : 'Boot', 'pending'),
     disabledAction('Install', 'pending'),
@@ -220,9 +225,10 @@ function DeviceActions({ device, onReload, onMenu, onStart, onStop }: {
   );
 }
 
-function DevicesScreen({ groups, selectedId, scrollRef, onSelect, actions }: {
+function DevicesScreen({ groups, selectedId, nameWidth, scrollRef, onSelect, actions }: {
   groups: DeviceGroup[];
   selectedId: string | null;
+  nameWidth: number;
   scrollRef: React.RefObject<ScrollBoxRenderable | null>;
   onSelect: (id: string) => void;
   actions: ReactNode;
@@ -242,7 +248,7 @@ function DevicesScreen({ groups, selectedId, scrollRef, onSelect, actions }: {
           'box',
           { key: group.platform, flexDirection: 'column', flexShrink: 0 },
           t(group.platform === 'ios' ? `iOS · ${group.devices.length}` : `ANDROID · ${group.devices.length}`, { fg: C.muted, dim: true }),
-          group.devices.map((device) => deviceRow(device, device.id === selectedId, onSelect)),
+          group.devices.map((device) => deviceRow(device, device.id === selectedId, nameWidth, onSelect)),
         )),
         total === 0 ? t('No devices match this view.', { fg: C.muted, dim: true }) : null,
       ),
@@ -401,7 +407,7 @@ function SideMenu({ active, filter, counts, onScreen, onFilter }: {
   return createElement(
     'box',
     {
-      width: 16,
+      width: 18,
       flexShrink: 0,
       paddingY: 1,
       flexDirection: 'column',
@@ -431,7 +437,7 @@ function Header({ project }: { project: ProjectInfo | undefined }): ReactNode {
     createElement(
       'box',
       { flexDirection: 'column', flexShrink: 0 },
-      createElement('text', { content: LOGO, fg: C.accent, attributes: BOLD }),
+      t('◆ rnctl', { fg: C.accent, bold: true }),
       t('react native mission control', { fg: C.muted }),
     ),
     createElement(
@@ -598,9 +604,12 @@ function Dashboard({ client }: { client: RpcClient }) {
       screen = createElement(EnvironmentScreen, { health });
       break;
     default:
+      // sidebar 18 + separator 1 + content/panel padding 5 + actions 28 + gap 1 + row chrome 12
+      const nameWidth = Math.max(12, Math.min(48, (renderer.width || 80) - 65));
       screen = createElement(DevicesScreen, {
         groups,
         selectedId: selectedDevice?.id ?? null,
+        nameWidth,
         scrollRef: devicesScroll,
         onSelect: (id: string) => {
           setSelectedId(id);
