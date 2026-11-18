@@ -380,11 +380,14 @@ function metroAction(label: string, tone: Tone, onPress: () => void): ReactNode 
   );
 }
 
-function MetroScreen({ metro, scripts, selectedScript, commandWidth, onSelectScript, onRunScript, onStart, onStop, onReload, onMenu }: {
+function MetroScreen({ metro, scripts, selectedScript, commandWidth, visibleRows, scrollTop, scrollRef, onSelectScript, onRunScript, onStart, onStop, onReload, onMenu }: {
   metro: { status: MetroStatus; pid?: number };
   scripts: ProjectInfo['scripts'];
   selectedScript: string | null;
   commandWidth: number;
+  visibleRows: number;
+  scrollTop: number;
+  scrollRef: React.RefObject<ScrollBoxRenderable | null>;
   onSelectScript: (name: string) => void;
   onRunScript: (name: string) => void;
   onStart: () => void;
@@ -398,33 +401,42 @@ function MetroScreen({ metro, scripts, selectedScript, commandWidth, onSelectScr
     'Metro',
     metro.status,
     createElement(
-      'scrollbox',
-      { flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden', scrollY: true, focused: true, scrollbarOptions: { visible: false, showArrows: false } },
+      'box',
+      { flexDirection: 'column', flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden' },
       createElement(
         'box',
-        { flexDirection: 'column', flexShrink: 0 },
-        createElement(
-          'box',
-          { flexDirection: 'row', gap: 1, flexShrink: 0 },
-          t(glyph, { fg: C[tone], bold: true }),
-          t(metro.status, { fg: C[tone], bold: true }),
-          t(metro.pid === undefined ? '' : `pid ${metro.pid}`, { fg: C.muted, dim: true }),
-        ),
-        createElement(
-          'box',
-          { flexDirection: 'row', gap: 1, flexShrink: 0 },
-          metroAction('Start', 'good', onStart),
-          metroAction('Stop', 'bad', onStop),
-          metroAction('Reload', 'accent', onReload),
-          metroAction('Dev menu', 'warn', onMenu),
-        ),
-        t('Project scripts', { fg: C.muted, bold: true }),
-        scripts.length === 0
-          ? t('No package.json scripts found', { fg: C.muted, dim: true })
-          : scripts.map((script) => createElement(
+        { flexDirection: 'row', gap: 1, flexShrink: 0 },
+        t(glyph, { fg: C[tone], bold: true }),
+        t(metro.status, { fg: C[tone], bold: true }),
+        t(metro.pid === undefined ? '' : `pid ${metro.pid}`, { fg: C.muted, dim: true }),
+      ),
+      createElement(
+        'box',
+        { flexDirection: 'row', gap: 1, flexShrink: 0 },
+        metroAction('Start', 'good', onStart),
+        metroAction('Stop', 'bad', onStop),
+        metroAction('Reload', 'accent', onReload),
+        metroAction('Dev menu', 'warn', onMenu),
+      ),
+      t('Project scripts', { fg: C.muted, bold: true }),
+      scripts.length === 0
+        ? t('No package.json scripts found', { fg: C.muted, dim: true })
+        : createElement(
+          'scrollbox',
+          {
+            ref: scrollRef,
+            flexGrow: 1,
+            flexBasis: 0,
+            minHeight: 0,
+            overflow: 'hidden',
+            scrollY: true,
+            scrollbarOptions: { visible: false, showArrows: false },
+          },
+          scripts.map((script) => createElement(
             'box',
             {
               key: `script-${script.name}`,
+              id: `script-${script.name}`,
               height: 1,
               flexDirection: 'row',
               gap: 1,
@@ -437,8 +449,10 @@ function MetroScreen({ metro, scripts, selectedScript, commandWidth, onSelectScr
             t(cut(script.name, 18), { fg: selectedScript === script.name ? C.text : C.muted, bold: selectedScript === script.name, shrink: true }),
             t(cut(script.command, commandWidth), { fg: C.muted, dim: true, shrink: true }),
           )),
-        t('Actions: s/x/r/d · Scripts: ↑↓ select · Enter run · click', { fg: C.muted, dim: true }),
-      ),
+        ),
+      scripts.length - visibleRows - Math.floor(scrollTop) > 0
+        ? t(`↓ ${scripts.length - visibleRows - Math.floor(scrollTop)} more`, { fg: C.muted, dim: true })
+        : null,
     ),
   );
 }
@@ -557,6 +571,7 @@ function Dashboard({ client }: { client: RpcClient }) {
   const renderer = useRenderer();
   const mounted = useRef(true);
   const devicesScroll = useRef<ScrollBoxRenderable | null>(null);
+  const scriptsScroll = useRef<ScrollBoxRenderable | null>(null);
   const healthRequested = useRef(false);
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -574,6 +589,7 @@ function Dashboard({ client }: { client: RpcClient }) {
   const [sessions, setSessions] = useState<LogSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [selectedSourceIndex, setSelectedSourceIndex] = useState(0);
+  const [scriptScrollTop, setScriptScrollTop] = useState(0);
   const columns = renderer.width || 80;
 
   const refreshSources = (): void => {
@@ -759,6 +775,14 @@ function Dashboard({ client }: { client: RpcClient }) {
   }, [active, selectedDevice, filter]);
 
   useEffect(() => {
+    if (active === 'metro' && selectedScript) {
+      const box = scriptsScroll.current;
+      box?.scrollChildIntoView(`script-${selectedScript}`, { align: 'nearest' });
+      if (box) setScriptScrollTop(box.scrollTop);
+    }
+  }, [active, selectedScript, project]);
+
+  useEffect(() => {
     if (active !== 'environment' || healthRequested.current) return;
     healthRequested.current = true;
     void client.call<{ checks: HealthCheck[] }>('doctor.check')
@@ -916,6 +940,9 @@ function Dashboard({ client }: { client: RpcClient }) {
         scripts: project?.scripts ?? [],
         selectedScript,
         commandWidth: columns >= 120 ? 64 : 28,
+        visibleRows: Math.max(3, (renderer.height || 24) - 19),
+        scrollTop: scriptScrollTop,
+        scrollRef: scriptsScroll,
         onSelectScript: setSelectedScript,
         onRunScript: runScript,
         onStart: () => invoke('metro.start', { resetCache: false }, 'Metro start requested', () => setMetro({ status: 'running' })),
