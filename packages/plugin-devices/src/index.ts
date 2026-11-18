@@ -89,6 +89,77 @@ export default definePlugin({
       handler: async () => ({ devices: await discover() }),
     });
 
+    type ActionResult = { ok: boolean; message: string };
+    const platformFor = async (id: string, platform?: 'ios' | 'android') => {
+      if (platform) return platform;
+      return (await discover()).find((device) => device.id === id)?.platform;
+    };
+    const run = async (command: string, args: string[]): Promise<ActionResult> => {
+      try {
+        const result = await ctx.processes.exec(command, args);
+        const message = (result.stderr || result.stdout).trim().split('\n')[0] ?? 'done';
+        return { ok: result.exitCode === 0, message: message.slice(0, 200) || 'done' };
+      } catch (error) {
+        return { ok: false, message: String(error) };
+      }
+    };
+    const iosOnly = (): ActionResult | undefined => process.platform === 'darwin'
+      ? undefined
+      : { ok: false, message: 'iOS simulator actions require macOS' };
+
+    const deviceInput = z.object({ id: z.string(), platform: z.enum(['ios', 'android']).optional() });
+
+    ctx.registerRpc('devices.boot', {
+      inputSchema: deviceInput,
+      handler: async ({ id, platform }) => {
+        const resolved = await platformFor(id, platform);
+        if (!resolved) return { ok: false, message: `Unknown device: ${id}` };
+        if (resolved === 'ios') return iosOnly() ?? run('xcrun', ['simctl', 'boot', id]);
+        try {
+          const handle = await ctx.processes.spawn(`emulator:${id}`, 'emulator', ['-avd', id]);
+          return { ok: true, message: `Emulator starting (pid ${handle.pid ?? 'unknown'})` };
+        } catch (error) {
+          return { ok: false, message: String(error) };
+        }
+      },
+    });
+
+    ctx.registerRpc('devices.shutdown', {
+      inputSchema: deviceInput,
+      handler: async ({ id, platform }) => {
+        const resolved = await platformFor(id, platform);
+        if (!resolved) return { ok: false, message: `Unknown device: ${id}` };
+        if (resolved === 'ios') return iosOnly() ?? run('xcrun', ['simctl', 'shutdown', id]);
+        return run('adb', ['-s', id, 'emu', 'kill']);
+      },
+    });
+
+    ctx.registerRpc('devices.installApp', {
+      inputSchema: deviceInput.extend({ path: z.string() }),
+      handler: async ({ id, platform, path }) => {
+        const resolved = await platformFor(id, platform);
+        if (!resolved) return { ok: false, message: `Unknown device: ${id}` };
+        if (resolved === 'ios') {
+          return iosOnly() ?? run('xcrun', ['simctl', 'install', id, path]);
+        }
+        return run('adb', ['-s', id, 'install', '-r', path]);
+      },
+    });
+
+    ctx.registerRpc('devices.runApp', {
+      inputSchema: deviceInput.extend({ app: z.string() }),
+      handler: async ({ id, platform, app }) => {
+        const resolved = await platformFor(id, platform);
+        if (!resolved) return { ok: false, message: `Unknown device: ${id}` };
+        if (resolved === 'ios') {
+          return iosOnly() ?? run('xcrun', ['simctl', 'launch', id, app]);
+        }
+        return run('adb', [
+          '-s', id, 'shell', 'monkey', '-p', app, '-c', 'android.intent.category.LAUNCHER', '1',
+        ]);
+      },
+    });
+
     ctx.registerCommand({
       name: 'devices',
       description: 'List available simulators and emulators',

@@ -4,7 +4,8 @@
  * screens keeps the device list, selection, log buffer, Metro status and health.
  *
  * Screens: 1-4 or [/] or ←/→ or click · devices: ↑/↓ or click · r reload · d dev
- * menu · s start · x stop · c clear logs · i environment · q/Ctrl+C quit.
+ * menu · s start · x stop · c clear logs · i environment · b boot · p shutdown ·
+ * f install app · a run app · q/Ctrl+C quit.
  */
 import {
   createCliRenderer,
@@ -23,7 +24,9 @@ type ScreenId = 'devices' | 'logs' | 'metro' | 'environment';
 type DeviceFilter = 'all' | 'ios' | 'android';
 type Platform = 'ios' | 'android';
 type MetroStatus = 'unknown' | 'running' | 'stopped';
+type PromptKind = 'installApp' | 'runApp';
 interface Notice { text: string; tone: Tone }
+interface ActionResult { ok: boolean; message: string }
 interface HealthCheck { name: string; ok: boolean; detail: string }
 interface ProjectInfo {
   name: string;
@@ -156,17 +159,7 @@ function deviceRow(device: DeviceInfo, active: boolean, nameWidth: number, onSel
   );
 }
 
-function disabledAction(label: string, hint: string): ReactNode {
-  return createElement(
-    'box',
-    { key: label, height: 1, flexDirection: 'row', gap: 1, paddingX: 1, flexShrink: 0 },
-    t('⊘', { fg: C.muted }),
-    t(label, { fg: C.muted }),
-    t(hint, { fg: C.muted, dim: true, grow: true, truncate: true }),
-  );
-}
-
-function wiredAction(label: string, tone: Tone, onPress: () => void, grow = false): ReactNode {
+function wiredAction(label: string, tone: Tone, onPress: () => void): ReactNode {
   return createElement(
     'box',
     {
@@ -176,7 +169,6 @@ function wiredAction(label: string, tone: Tone, onPress: () => void, grow = fals
       gap: 1,
       paddingX: 1,
       flexShrink: 0,
-      flexGrow: grow ? 1 : undefined,
       backgroundColor: C.selected,
       onMouseUp: onPress,
     },
@@ -185,9 +177,15 @@ function wiredAction(label: string, tone: Tone, onPress: () => void, grow = fals
   );
 }
 
-function DeviceActions({ device, width, onReload, onMenu, onStart, onStop }: {
+function DeviceActions({ device, width, prompt, promptValue, onBoot, onShutdown, onInstall, onRunApp, onReload, onMenu, onStart, onStop }: {
   device: DeviceInfo | undefined;
   width: number;
+  prompt: PromptKind | null;
+  promptValue: string;
+  onBoot: () => void;
+  onShutdown: () => void;
+  onInstall: () => void;
+  onRunApp: () => void;
   onReload: () => void;
   onMenu: () => void;
   onStart: () => void;
@@ -202,6 +200,7 @@ function DeviceActions({ device, width, onReload, onMenu, onStart, onStop }: {
     );
   }
   const booted = device.state === 'booted';
+  // No file picker in the TUI: install takes a typed path, run takes a typed bundle/package id.
   return createElement(
     'box',
     {
@@ -215,14 +214,23 @@ function DeviceActions({ device, width, onReload, onMenu, onStart, onStop }: {
     },
     t('Actions', { bold: true }),
     t(cut(device.name, width - 2), { fg: C.muted }),
-    // shortcut: boot/shutdown/install/run have no RPC yet; wire them here when plugin-devices adds them.
-    disabledAction(booted ? 'Shutdown' : 'Boot', 'pending'),
-    disabledAction('Install', 'pending'),
-    disabledAction('Run app', 'pending'),
-    wiredAction('JS reload', 'accent', onReload),
-    wiredAction('Dev menu', 'warn', onMenu),
-    wiredAction('Metro start', 'good', onStart),
-    wiredAction('Stop', 'bad', onStop),
+    prompt === null ? createElement(
+      'box',
+      { key: 'device-actions', flexDirection: 'column', flexShrink: 0 },
+      wiredAction(booted ? 'p Shutdown' : 'b Boot', booted ? 'warn' : 'good', booted ? onShutdown : onBoot),
+      wiredAction('f Install app', 'accent', onInstall),
+      wiredAction('a Run app', 'accent', onRunApp),
+      wiredAction('r JS reload', 'accent', onReload),
+      wiredAction('d Dev menu', 'warn', onMenu),
+      wiredAction('s Metro start', 'good', onStart),
+      wiredAction('x Stop', 'bad', onStop),
+    ) : createElement(
+      'box',
+      { key: 'prompt', flexDirection: 'column', flexShrink: 0 },
+      t(prompt === 'installApp' ? 'Install path' : 'Bundle / package', { fg: C.muted }),
+      t(`${cut(promptValue, width - 3)}▌`, { fg: C.text }),
+      t('↵ ok · esc cancel', { fg: C.muted, dim: true }),
+    ),
   );
 }
 
@@ -464,6 +472,29 @@ function Dashboard({ client }: { client: RpcClient }) {
   const [health, setHealth] = useState<HealthCheck[] | undefined>(undefined);
   const [project, setProject] = useState<ProjectInfo | undefined>(undefined);
   const [active, setActive] = useState<ScreenId>('devices');
+  const [prompt, setPrompt] = useState<PromptKind | null>(null);
+  const [promptValue, setPromptValue] = useState('');
+
+  const refreshDevices = (): void => {
+    void client.call<{ devices: DeviceInfo[] }>('devices.list')
+      .then((result) => { if (mounted.current) setDevices(result.devices); })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `devices.list: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  /** Device RPCs return { ok, message }; never infer success from a resolved promise. */
+  const invokeDevice = (method: string, params: unknown): void => {
+    void client.call<ActionResult>(method, params)
+      .then((result) => {
+        if (!mounted.current) return;
+        setNotice({ text: result.message || (result.ok ? 'done' : 'failed'), tone: result.ok ? 'good' : 'bad' });
+        if (result.ok && (method === 'devices.boot' || method === 'devices.shutdown')) refreshDevices();
+      })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `${method}: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
 
   /** Fire an action and surface failures in the footer instead of crashing. */
   const invoke = (method: string, params: unknown, message: string, onDone?: () => void): void => {
@@ -485,11 +516,6 @@ function Dashboard({ client }: { client: RpcClient }) {
       if (live) setNotice({ text: `${method}: ${reasonText(reason)}`, tone: 'bad' });
     };
 
-    const refreshDevices = (): void => {
-      void client.call<{ devices: DeviceInfo[] }>('devices.list')
-        .then((result) => { if (live) setDevices(result.devices); })
-        .catch((reason: unknown) => fail('devices.list', reason));
-    };
     refreshDevices();
     void client.call<{ entries: LogEntry[] }>('logs.list', { limit: 100 })
       .then((result) => { if (live) setEntries(result.entries); })
@@ -551,9 +577,40 @@ function Dashboard({ client }: { client: RpcClient }) {
     });
   };
 
+  const startPrompt = (kind: PromptKind): void => {
+    if (!selectedDevice) { setNotice({ text: 'Select a device first', tone: 'warn' }); return; }
+    setPrompt(kind);
+    setPromptValue('');
+  };
+
+  const submitPrompt = (): void => {
+    const value = promptValue.trim();
+    if (!value) { setNotice({ text: 'Enter a value first', tone: 'warn' }); return; }
+    if (!selectedDevice || !prompt) { setPrompt(null); return; }
+    const params = prompt === 'installApp'
+      ? { id: selectedDevice.id, platform: selectedDevice.platform, path: value }
+      : { id: selectedDevice.id, platform: selectedDevice.platform, app: value };
+    invokeDevice(prompt === 'installApp' ? 'devices.installApp' : 'devices.runApp', params);
+    setPrompt(null);
+  };
+
   useKeyboard((key: KeyEvent) => {
     if (key.ctrl || key.meta || key.eventType === 'release') return;
     const name = key.name;
+    if (prompt) {
+      key.preventDefault();
+      if (name === 'escape' || name === 'esc') {
+        setPrompt(null);
+        setNotice({ text: 'Cancelled', tone: 'muted' });
+      } else if (name === 'return' || name === 'enter') {
+        submitPrompt();
+      } else if (name === 'backspace') {
+        setPromptValue((current) => current.slice(0, -1));
+      } else if (name.length === 1) {
+        setPromptValue((current) => current + (name === 'space' ? ' ' : name));
+      }
+      return;
+    }
     if (name === 'q') { renderer.destroy(); return; }
     if (name === 'tab' || name === '[' || name === 'left' || name === 'right') {
       key.preventDefault();
@@ -575,6 +632,13 @@ function Dashboard({ client }: { client: RpcClient }) {
       return; // other screens keep focus so their scrollbox handles arrows
     }
     if (name === 'i') { setActive('environment'); return; }
+    if (active === 'devices' && selectedDevice) {
+      const params = { id: selectedDevice.id, platform: selectedDevice.platform };
+      if (name === 'b') { invokeDevice('devices.boot', params); return; }
+      if (name === 'p') { invokeDevice('devices.shutdown', params); return; }
+      if (name === 'f') { startPrompt('installApp'); return; }
+      if (name === 'a') { startPrompt('runApp'); return; }
+    }
     const target = selectedDevice ? selectedDevice.name : 'no device selected';
     switch (name) {
       case 'r': invoke('metro.reload', {}, `JS reload → ${target}`); break;
@@ -621,6 +685,12 @@ function Dashboard({ client }: { client: RpcClient }) {
         actions: createElement(DeviceActions, {
           device: selectedDevice,
           width: actionWidth,
+          prompt,
+          promptValue,
+          onBoot: () => { if (selectedDevice) invokeDevice('devices.boot', { id: selectedDevice.id, platform: selectedDevice.platform }); },
+          onShutdown: () => { if (selectedDevice) invokeDevice('devices.shutdown', { id: selectedDevice.id, platform: selectedDevice.platform }); },
+          onInstall: () => startPrompt('installApp'),
+          onRunApp: () => startPrompt('runApp'),
           onReload: () => invoke('metro.reload', {}, `JS reload → ${target}`),
           onMenu: () => invoke('metro.devMenu', {}, `Dev menu → ${target}`),
           onStart: () => invoke('metro.start', { resetCache: false }, 'Metro start requested', () => setMetro({ status: 'running' })),
@@ -679,7 +749,7 @@ function Dashboard({ client }: { client: RpcClient }) {
         justifyContent: 'center',
       },
       t(`${notice.tone === 'bad' ? '✗' : '›'} ${notice.text}`, { fg: C[notice.tone], truncate: true }),
-      t('1-4 / [ ] / ←→ screens · ↑↓ devices · r reload · d menu · s/x metro · c clear · i env · q quit', {
+      t('1-4/[ ]/←→ screens · ↑↓ · b boot · p down · f install · a run · r/d/s/x · q quit', {
         fg: C.muted,
         dim: true,
         truncate: true,
