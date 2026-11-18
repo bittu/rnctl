@@ -55,6 +55,23 @@ describe('ProcessSupervisor', () => {
     expect(supervisor.get('long')).toBeUndefined();
   });
 
+  it('writes to a spawned process stdin', async () => {
+    let resolveOutput!: () => void;
+    const output = new Promise<void>((resolve) => { resolveOutput = resolve; });
+    let seen = '';
+    const supervisor = new ProcessSupervisor((topic, payload) => {
+      if (topic === 'process:stdout') {
+        seen += (payload as { chunk: string }).chunk;
+        resolveOutput();
+      }
+    });
+    await supervisor.spawn('stdin-test', node, ['-e', "process.stdin.on('data', (d) => process.stdout.write(d))"]);
+    await supervisor.write('stdin-test', 'ping');
+    await Promise.race([output, new Promise((resolve) => setTimeout(resolve, 2000))]);
+    expect(seen).toContain('ping');
+    await supervisor.shutdown(100);
+  });
+
   it('terminates every tracked process on shutdown', async () => {
     const supervisor = new ProcessSupervisor();
     await supervisor.spawn('a', node, ['-e', forever]);

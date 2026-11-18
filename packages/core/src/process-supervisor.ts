@@ -24,7 +24,7 @@ export class ProcessSupervisor implements Processes {
     const child = spawnChild(command, args, {
       cwd: options.cwd,
       env: { ...process.env, ...options.env },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.handles.set(id, child);
 
@@ -51,7 +51,7 @@ export class ProcessSupervisor implements Processes {
       const child = spawnChild(command, args, {
         cwd: options.cwd,
         env: { ...process.env, ...options.env },
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
       });
       let stdout = '';
       let stderr = '';
@@ -69,6 +69,14 @@ export class ProcessSupervisor implements Processes {
       return;
     }
     child.kill(signal as NodeJS.Signals);
+  }
+
+  async write(id: string, input: string): Promise<void> {
+    const child = this.handles.get(id);
+    if (!child?.stdin || child.stdin.destroyed) {
+      throw new Error(`Process "${id}" has no open stdin`);
+    }
+    child.stdin.write(input);
   }
 
   get(id: string): ProcessHandle | undefined {

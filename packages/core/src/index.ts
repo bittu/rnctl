@@ -4,6 +4,7 @@ import { PluginLoader } from './plugin-loader.js';
 import { ProcessSupervisor } from './process-supervisor.js';
 import { startRpcServer, type RpcServer } from './rpc-server.js';
 
+export { discoverPlugins } from './plugin-discovery.js';
 export { TypedEventBus } from './event-bus.js';
 export { PluginLoader } from './plugin-loader.js';
 export { ProcessSupervisor } from './process-supervisor.js';

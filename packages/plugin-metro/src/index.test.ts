@@ -6,14 +6,15 @@ function setup() {
   const rpcs = new Map<string, RpcMethod>();
   const spawn = vi.fn(async () => ({ id: 'metro', pid: 1234 }));
   const stop = vi.fn(async () => {});
+  const write = vi.fn(async () => {});
   const ctx = {
-    bus: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
+    bus: { on: vi.fn(), off: vi.fn(), emit: vi.fn(), onAny: vi.fn() },
     logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    processes: { spawn, exec: vi.fn(), stop },
+    processes: { spawn, exec: vi.fn(), stop, write },
     registerRpc: (name: string, method: RpcMethod) => { rpcs.set(name, method); },
     registerCommand: vi.fn(),
   } as unknown as PluginContext;
-  return { ctx, rpcs, spawn, stop };
+  return { ctx, rpcs, spawn, stop, write };
 }
 
 describe('plugin-metro', () => {
@@ -32,6 +33,16 @@ describe('plugin-metro', () => {
 
     expect(await rpcs.get('metro.stop')!.handler({})).toEqual({ stopped: true });
     expect(stop).toHaveBeenCalledWith('metro');
+  });
+
+  it('sends reload and dev-menu keys to Metro stdin', async () => {
+    const { ctx, rpcs, write } = setup();
+    await plugin.setup(ctx);
+
+    expect(await rpcs.get('metro.reload')!.handler({})).toEqual({ sent: true });
+    expect(await rpcs.get('metro.devMenu')!.handler({})).toEqual({ sent: true });
+    expect(write).toHaveBeenNthCalledWith(1, 'metro', 'r');
+    expect(write).toHaveBeenNthCalledWith(2, 'metro', 'd');
   });
 
   it('does not throw when Metro is already running', async () => {

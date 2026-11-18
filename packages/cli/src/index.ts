@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { createDaemon, RpcClient } from '@rnctl/core';
+import { createDaemon, discoverPlugins, RpcClient } from '@rnctl/core';
 import devices from '@rnctl/plugin-devices';
 import doctor from '@rnctl/plugin-doctor';
 import logs from '@rnctl/plugin-logs';
@@ -27,6 +27,10 @@ async function main(): Promise<void> {
   const daemon = createDaemon(logger);
   let webServer: WebServer | undefined;
   for (const plugin of [devices, metro, logs, doctor]) {
+    await daemon.loader.load(plugin);
+  }
+  for (const plugin of await discoverPlugins()) {
+    if (daemon.loader.list().some((loaded) => loaded.name === plugin.name)) continue;
     await daemon.loader.load(plugin);
   }
 

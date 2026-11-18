@@ -7,7 +7,7 @@ export default definePlugin({
   version: '0.1.0',
   description: 'Metro bundler and app build supervision',
   async setup(ctx) {
-    // shortcut: Expo project detection and stdin reload/dev-menu await a stdin API in Processes.
+    // shortcut: Expo project detection is not implemented; Metro CLI is assumed.
     ctx.registerRpc('metro.start', {
       inputSchema: z.object({
         resetCache: z.boolean().default(false),
@@ -32,6 +32,24 @@ export default definePlugin({
         return { stopped: true };
       },
     });
+
+    for (const [method, key, label] of [
+      ['metro.reload', 'r', 'Reload'],
+      ['metro.devMenu', 'd', 'Dev menu'],
+    ] as const) {
+      ctx.registerRpc(method, {
+        inputSchema: z.object({}),
+        handler: async () => {
+          try {
+            await ctx.processes.write(PROCESS_ID, key);
+            return { sent: true };
+          } catch (error) {
+            ctx.logger.debug(`${label} skipped: ${String(error)}`);
+            return { sent: false };
+          }
+        },
+      });
+    }
 
     ctx.registerCommand({
       name: 'metro',
