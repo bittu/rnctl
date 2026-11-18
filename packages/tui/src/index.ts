@@ -150,9 +150,9 @@ function deviceRow(device: DeviceInfo, active: boolean, nameWidth: number, onSel
       onMouseUp: () => onSelect(device.id),
     },
     t(active ? '▸' : ' ', { fg: active ? C.accent : C.muted, shrink: true }),
-    t(booted ? '●' : '○', { fg: booted ? C.good : C.muted, shrink: true }),
     t(cut(device.name, nameWidth), { bold: active }),
     t(device.platform === 'ios' ? 'iOS' : 'AND', { fg: active ? C.accent : C.muted, shrink: true }),
+    t(booted ? '· running' : '· shutdown', { fg: booted ? C.good : C.muted, shrink: true }),
   );
 }
 
@@ -185,8 +185,9 @@ function wiredAction(label: string, tone: Tone, onPress: () => void, grow = fals
   );
 }
 
-function DeviceActions({ device, onReload, onMenu, onStart, onStop }: {
+function DeviceActions({ device, width, onReload, onMenu, onStart, onStop }: {
   device: DeviceInfo | undefined;
+  width: number;
   onReload: () => void;
   onMenu: () => void;
   onStart: () => void;
@@ -195,7 +196,7 @@ function DeviceActions({ device, onReload, onMenu, onStart, onStop }: {
   if (!device) {
     return createElement(
       'box',
-      { width: 28, flexShrink: 0, backgroundColor: C.surface, paddingX: 1, paddingY: 1, overflow: 'hidden' },
+      { width, flexShrink: 0, backgroundColor: C.surface, paddingX: 1, paddingY: 1, overflow: 'hidden' },
       t('Actions', { bold: true }),
       t('Select a device to see actions.', { fg: C.muted, dim: true }),
     );
@@ -204,7 +205,7 @@ function DeviceActions({ device, onReload, onMenu, onStart, onStop }: {
   return createElement(
     'box',
     {
-      width: 28,
+      width,
       flexShrink: 0,
       backgroundColor: C.surface,
       paddingX: 1,
@@ -213,7 +214,7 @@ function DeviceActions({ device, onReload, onMenu, onStart, onStop }: {
       overflow: 'hidden',
     },
     t('Actions', { bold: true }),
-    t(cut(device.name, 26), { fg: C.muted }),
+    t(cut(device.name, width - 2), { fg: C.muted }),
     // shortcut: boot/shutdown/install/run have no RPC yet; wire them here when plugin-devices adds them.
     disabledAction(booted ? 'Shutdown' : 'Boot', 'pending'),
     disabledAction('Install', 'pending'),
@@ -604,8 +605,10 @@ function Dashboard({ client }: { client: RpcClient }) {
       screen = createElement(EnvironmentScreen, { health });
       break;
     default:
-      // sidebar 18 + separator 1 + content/panel padding 5 + actions 28 + gap 1 + row chrome 12
-      const nameWidth = Math.max(12, Math.min(48, (renderer.width || 80) - 65));
+      // Keep the device name + platform + state on one line: 27 cols of chrome, 19 of row overhead.
+      const columns = renderer.width || 80;
+      const actionWidth = columns >= 120 ? 28 : 20;
+      const nameWidth = Math.max(10, Math.min(48, columns - 27 - actionWidth - 19));
       screen = createElement(DevicesScreen, {
         groups,
         selectedId: selectedDevice?.id ?? null,
@@ -617,6 +620,7 @@ function Dashboard({ client }: { client: RpcClient }) {
         },
         actions: createElement(DeviceActions, {
           device: selectedDevice,
+          width: actionWidth,
           onReload: () => invoke('metro.reload', {}, `JS reload → ${target}`),
           onMenu: () => invoke('metro.devMenu', {}, `Dev menu → ${target}`),
           onStart: () => invoke('metro.start', { resetCache: false }, 'Metro start requested', () => setMetro({ status: 'running' })),
