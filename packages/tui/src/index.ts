@@ -1,10 +1,10 @@
 /**
- * Fixed-viewport mission control: header + tab bar never scroll, only the active
- * screen's content does. Screens are stateless views over state owned here, so
- * switching tabs keeps the device list, selection, log buffer and health checks.
+ * Fixed-viewport mission control: header, side menu and footer never scroll; only
+ * the active screen's content does. All state lives in Dashboard, so switching
+ * screens keeps the device list, selection, log buffer, Metro status and health.
  *
- * Tabs: 1-4 or [/] or click · devices: ↑/↓ or click · r reload · d dev menu ·
- * s start · x stop · c clear logs · i environment · q/Ctrl+C quit.
+ * Screens: 1-4 or [/] or ←/→ or click · devices: ↑/↓ or click · r reload · d dev
+ * menu · s start · x stop · c clear logs · i environment · q/Ctrl+C quit.
  */
 import {
   createCliRenderer,
@@ -19,31 +19,46 @@ import type { DeviceInfo, LogEntry, ProcessExit } from '@rnctl/sdk';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 type Tone = 'accent' | 'good' | 'warn' | 'bad' | 'muted' | 'text';
-type TabId = 'devices' | 'logs' | 'metro' | 'environment';
+type ScreenId = 'devices' | 'logs' | 'metro' | 'environment';
+type DeviceFilter = 'all' | 'ios' | 'android';
+type Platform = 'ios' | 'android';
 type MetroStatus = 'unknown' | 'running' | 'stopped';
 interface Notice { text: string; tone: Tone }
 interface HealthCheck { name: string; ok: boolean; detail: string }
+interface ProjectInfo {
+  name: string;
+  isReactNative: boolean;
+  scripts: Array<{ name: string; command: string }>;
+}
+interface DeviceGroup { platform: Platform; devices: DeviceInfo[] }
 
 const MAX_LOGS = 200;
-const TABS: ReadonlyArray<{ id: TabId; label: string; key: string }> = [
+const SPLASH_MS = 1800;
+const SCREENS: ReadonlyArray<{ id: ScreenId; label: string; key: string }> = [
   { id: 'devices', label: 'DEVICES', key: '1' },
   { id: 'logs', label: 'LOGS', key: '2' },
   { id: 'metro', label: 'METRO', key: '3' },
   { id: 'environment', label: 'ENVIRONMENT', key: '4' },
 ];
 
+/** Restrained OpenCode-inspired dark palette. */
 const C = {
   accent: '#22d3ee',
   good: '#34d399',
   warn: '#fbbf24',
   bad: '#f87171',
-  muted: '#7c8ba1',
+  muted: '#64748b',
   text: '#e2e8f0',
-  root: '#080b11',
-  panel: '#0f1622',
-  selected: '#0e4a5a',
-  border: '#243044',
+  root: '#0b1120',
+  panel: '#131c2e',
+  selected: '#16283a',
+  border: '#1e293b',
 } as const;
+
+const LOGO = [
+  ' █▀▀█ █▀▄█ █▀▀▀ █████ █    ',
+  ' █▄▀█ █ ▀█ █▄▄▄   █   █▄▄▄▄',
+].join('\n');
 
 const BOLD = createTextAttributes({ bold: true });
 const DIM = createTextAttributes({ dim: true });
@@ -78,7 +93,7 @@ function panel(title: string, meta: string | undefined, tone: Tone, children: Re
       flexDirection: 'column',
       border: true,
       borderStyle: 'rounded',
-      borderColor: C[tone],
+      borderColor: C.border,
       backgroundColor: C.panel,
       paddingX: 1,
       gap: 1,
@@ -97,53 +112,150 @@ function panel(title: string, meta: string | undefined, tone: Tone, children: Re
   );
 }
 
-function deviceRow(device: DeviceInfo, index: number, active: boolean, onSelect: (index: number) => void): ReactNode {
-  const glyph = device.state === 'booted' ? '●' : '○';
+/** Booted devices first; iOS and Android stay as separate groups. */
+function deviceGroups(devices: DeviceInfo[]): DeviceGroup[] {
+  return (['ios', 'android'] as const)
+    .map((platform) => ({
+      platform,
+      devices: devices
+        .filter((device) => device.platform === platform)
+        .sort((a, b) => Number(b.state === 'booted') - Number(a.state === 'booted') || a.name.localeCompare(b.name)),
+    }))
+    .filter((group) => group.devices.length > 0)
+    .sort((a, b) => {
+      const bootedA = a.devices.filter((device) => device.state === 'booted').length;
+      const bootedB = b.devices.filter((device) => device.state === 'booted').length;
+      return bootedB - bootedA || (a.platform === 'ios' ? -1 : 1);
+    });
+}
+
+function deviceRow(device: DeviceInfo, active: boolean, onSelect: (id: string) => void): ReactNode {
+  const booted = device.state === 'booted';
   return createElement(
     'box',
     {
-      key: `dev-${index}`,
-      id: `dev-${index}`,
+      key: `dev-${device.id}`,
+      id: `dev-${device.id}`,
       flexDirection: 'row',
       gap: 1,
       height: 1,
       flexShrink: 0,
       paddingX: 1,
       backgroundColor: active ? C.selected : undefined,
-      onMouseUp: () => onSelect(index),
+      onMouseUp: () => onSelect(device.id),
     },
-    t(String(index + 1).padStart(2, ' '), { fg: active ? C.accent : C.muted }),
-    t(glyph, { fg: device.state === 'booted' ? C.good : C.muted }),
-    t(cut(device.name, 48), { bold: active, grow: true, truncate: true }),
+    t(active ? '▸' : ' ', { fg: active ? C.accent : C.muted }),
+    t(booted ? '●' : '○', { fg: booted ? C.good : C.muted }),
+    t(cut(device.name, 40), { bold: active, grow: true, truncate: true }),
     t(device.platform === 'ios' ? 'iOS' : 'AND', { fg: active ? C.accent : C.muted }),
-    t(device.state, { fg: device.state === 'booted' ? C.good : C.muted }),
+    t(device.state, { fg: booted ? C.good : C.muted }),
   );
 }
 
-function DevicesScreen({ devices, selected, scrollRef, onSelect }: {
-  devices: DeviceInfo[];
-  selected: number;
-  scrollRef: React.RefObject<ScrollBoxRenderable | null>;
-  onSelect: (index: number) => void;
+function disabledAction(label: string, hint: string): ReactNode {
+  return createElement(
+    'box',
+    { key: label, height: 1, flexDirection: 'row', gap: 1, paddingX: 1, flexShrink: 0 },
+    t('⊘', { fg: C.muted }),
+    t(label, { fg: C.muted }),
+    t(hint, { fg: C.muted, dim: true, grow: true, truncate: true }),
+  );
+}
+
+function wiredAction(label: string, tone: Tone, onPress: () => void, grow = false): ReactNode {
+  return createElement(
+    'box',
+    {
+      key: label,
+      height: 1,
+      flexDirection: 'row',
+      gap: 1,
+      paddingX: 1,
+      flexShrink: 0,
+      flexGrow: grow ? 1 : undefined,
+      onMouseUp: onPress,
+    },
+    t('›', { fg: C[tone] }),
+    t(label, { fg: C[tone], bold: true, truncate: true }),
+  );
+}
+
+function DeviceActions({ device, onReload, onMenu, onStart, onStop }: {
+  device: DeviceInfo | undefined;
+  onReload: () => void;
+  onMenu: () => void;
+  onStart: () => void;
+  onStop: () => void;
 }): ReactNode {
-  const booted = devices.filter((device) => device.state === 'booted').length;
+  if (!device) {
+    return createElement(
+      'box',
+      { width: 34, flexShrink: 0, border: true, borderStyle: 'rounded', borderColor: C.border, backgroundColor: C.panel, paddingX: 1, paddingY: 1, overflow: 'hidden' },
+      t('ACTIONS', { fg: C.accent, bold: true }),
+      t('Select a device to see actions.', { fg: C.muted, dim: true }),
+    );
+  }
+  const booted = device.state === 'booted';
+  return createElement(
+    'box',
+    {
+      width: 34,
+      flexShrink: 0,
+      border: true,
+      borderStyle: 'rounded',
+      borderColor: C.border,
+      backgroundColor: C.panel,
+      paddingX: 1,
+      paddingY: 1,
+      flexDirection: 'column',
+      gap: 1,
+      overflow: 'hidden',
+    },
+    t(`ACTIONS · ${cut(device.name, 19)}`, { fg: C.accent, bold: true, truncate: true }),
+    t(cut(device.id, 30), { fg: C.muted, dim: true, truncate: true }),
+    // shortcut: boot/shutdown/install/run have no RPC yet; wire them here when plugin-devices adds them.
+    disabledAction(booted ? 'SHUTDOWN' : 'BOOT / START', 'pending RPC'),
+    disabledAction('INSTALL APP', 'pending RPC'),
+    disabledAction('RUN APP', 'pending RPC'),
+    wiredAction('JS RELOAD', 'accent', onReload),
+    wiredAction('DEV MENU', 'warn', onMenu),
+    createElement(
+      'box',
+      { flexDirection: 'row', gap: 1, flexShrink: 0 },
+      wiredAction('METRO START', 'good', onStart, true),
+      wiredAction('STOP', 'bad', onStop, true),
+    ),
+  );
+}
+
+function DevicesScreen({ groups, selectedId, scrollRef, onSelect, actions }: {
+  groups: DeviceGroup[];
+  selectedId: string | null;
+  scrollRef: React.RefObject<ScrollBoxRenderable | null>;
+  onSelect: (id: string) => void;
+  actions: ReactNode;
+}): ReactNode {
+  const total = groups.reduce((sum, group) => sum + group.devices.length, 0);
+  const booted = groups.reduce((sum, group) => sum + group.devices.filter((device) => device.state === 'booted').length, 0);
   return panel(
     'DEVICES',
-    `${devices.length} found · ${booted} booted`,
+    `${total} shown · ${booted} booted`,
     'accent',
     createElement(
-      'scrollbox',
-      {
-        ref: scrollRef,
-        flexGrow: 1,
-        flexBasis: 0,
-        minHeight: 0,
-        overflow: 'hidden',
-        scrollY: true,
-      },
-      devices.length === 0
-        ? t('No devices discovered. Boot a simulator or connect an emulator.', { fg: C.muted, dim: true })
-        : devices.map((device, index) => deviceRow(device, index, index === selected, onSelect)),
+      'box',
+      { flexDirection: 'row', flexGrow: 1, flexBasis: 0, minHeight: 0, gap: 1, overflow: 'hidden' },
+      createElement(
+        'scrollbox',
+        { ref: scrollRef, flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden', scrollY: true },
+        groups.map((group) => createElement(
+          'box',
+          { key: group.platform, flexDirection: 'column', flexShrink: 0 },
+          t(group.platform === 'ios' ? `iOS · ${group.devices.length}` : `ANDROID · ${group.devices.length}`, { fg: C.muted, dim: true }),
+          group.devices.map((device) => deviceRow(device, device.id === selectedId, onSelect)),
+        )),
+        total === 0 ? t('No devices match this view.', { fg: C.muted, dim: true }) : null,
+      ),
+      actions,
     ),
   );
 }
@@ -183,18 +295,17 @@ function LogsScreen({ entries }: { entries: LogEntry[] }): ReactNode {
   );
 }
 
-function action(label: string, tone: Tone, onPress: () => void): ReactNode {
+function flatAction(label: string, tone: Tone, onPress: () => void): ReactNode {
   return createElement(
     'box',
     {
       key: label,
-      height: 3,
-      paddingX: 2,
+      height: 1,
+      paddingX: 1,
       border: true,
       borderStyle: 'rounded',
-      borderColor: C[tone],
-      justifyContent: 'center',
-      alignItems: 'center',
+      borderColor: C.border,
+      flexShrink: 0,
       onMouseUp: onPress,
     },
     t(label, { fg: C[tone], bold: true }),
@@ -230,10 +341,10 @@ function MetroScreen({ metro, onStart, onStop, onReload, onMenu }: {
         createElement(
           'box',
           { flexDirection: 'row', gap: 1, flexShrink: 0 },
-          action('START', 'good', onStart),
-          action('STOP', 'bad', onStop),
-          action('RELOAD', 'accent', onReload),
-          action('DEV MENU', 'warn', onMenu),
+          flatAction('START', 'good', onStart),
+          flatAction('STOP', 'bad', onStop),
+          flatAction('RELOAD', 'accent', onReload),
+          flatAction('DEV MENU', 'warn', onMenu),
         ),
         t('Click an action, or use s / x / r / d.', { fg: C.muted, dim: true }),
       ),
@@ -263,18 +374,133 @@ function EnvironmentScreen({ health }: { health: HealthCheck[] | undefined }): R
   );
 }
 
+function SideMenu({ active, filter, counts, onScreen, onFilter }: {
+  active: ScreenId;
+  filter: DeviceFilter;
+  counts: Record<Platform, number>;
+  onScreen: (id: ScreenId) => void;
+  onFilter: (filter: DeviceFilter) => void;
+}): ReactNode {
+  const entry = (screen: ScreenId, label: string, key: string): ReactNode => {
+    const isActive = active === screen;
+    return createElement(
+      'box',
+      {
+        key: screen,
+        height: 1,
+        flexDirection: 'row',
+        gap: 1,
+        paddingX: 1,
+        flexShrink: 0,
+        backgroundColor: isActive ? C.selected : undefined,
+        onMouseUp: () => onScreen(screen),
+      },
+      t(isActive ? '▸' : ' ', { fg: isActive ? C.accent : C.muted }),
+      t(key, { fg: isActive ? C.accent : C.muted }),
+      t(label, { fg: isActive ? C.text : C.muted, bold: isActive, truncate: true }),
+    );
+  };
+  const subEntry = (platform: Platform, label: string): ReactNode => {
+    const isActive = active === 'devices' && filter === platform;
+    return createElement(
+      'box',
+      {
+        key: platform,
+        height: 1,
+        flexDirection: 'row',
+        gap: 1,
+        paddingLeft: 4,
+        flexShrink: 0,
+        backgroundColor: isActive ? C.selected : undefined,
+        onMouseUp: () => { onFilter(platform); onScreen('devices'); },
+      },
+      t(isActive ? '›' : '·', { fg: isActive ? C.accent : C.muted }),
+      t(`${label} (${counts[platform]})`, { fg: isActive ? C.accent : C.muted, truncate: true }),
+    );
+  };
+  return createElement(
+    'box',
+    {
+      width: 24,
+      flexShrink: 0,
+      border: true,
+      borderStyle: 'rounded',
+      borderColor: C.border,
+      backgroundColor: C.panel,
+      paddingX: 1,
+      flexDirection: 'column',
+      overflow: 'hidden',
+    },
+    entry('devices', 'DEVICES', '1'),
+    subEntry('ios', 'iOS'),
+    subEntry('android', 'Android'),
+    entry('logs', 'LOGS', '2'),
+    entry('metro', 'METRO', '3'),
+    entry('environment', 'ENVIRONMENT', '4'),
+  );
+}
+
+function Header({ splash, project }: { splash: boolean; project: ProjectInfo | undefined }): ReactNode {
+  if (splash) {
+    return createElement(
+      'box',
+      {
+        flexShrink: 0,
+        height: 4,
+        border: ['bottom'],
+        borderColor: C.border,
+        backgroundColor: C.panel,
+        paddingX: 1,
+        flexDirection: 'column',
+        justifyContent: 'center',
+      },
+      createElement('text', { content: LOGO, fg: C.accent, attributes: BOLD }),
+      t('react native mission control', { fg: C.muted }),
+    );
+  }
+  return createElement(
+    'box',
+    {
+      flexShrink: 0,
+      height: 3,
+      border: ['bottom'],
+      borderColor: C.border,
+      backgroundColor: C.panel,
+      paddingX: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    createElement(
+      'box',
+      { flexDirection: 'row', gap: 1 },
+      t('◆ rnctl', { fg: C.accent, bold: true }),
+      t('// react native mission control', { fg: C.muted, dim: true, truncate: true }),
+    ),
+    createElement(
+      'box',
+      { flexDirection: 'row', gap: 1, flexShrink: 0 },
+      t(project?.name ?? '…', { fg: C.muted, dim: true, truncate: true }),
+      t('● daemon', { fg: C.good }),
+    ),
+  );
+}
+
 function Dashboard({ client }: { client: RpcClient }) {
   const renderer = useRenderer();
   const mounted = useRef(true);
   const devicesScroll = useRef<ScrollBoxRenderable | null>(null);
   const healthRequested = useRef(false);
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
-  const [selected, setSelected] = useState(0);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [filter, setFilter] = useState<DeviceFilter>('all');
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [metro, setMetro] = useState<{ status: MetroStatus; pid?: number }>({ status: 'unknown' });
   const [notice, setNotice] = useState<Notice>({ text: 'ready', tone: 'muted' });
   const [health, setHealth] = useState<HealthCheck[] | undefined>(undefined);
-  const [activeTab, setActiveTab] = useState<TabId>('devices');
+  const [project, setProject] = useState<ProjectInfo | undefined>(undefined);
+  const [active, setActive] = useState<ScreenId>('devices');
+  const [splash, setSplash] = useState(true);
 
   /** Fire an action and surface failures in the footer instead of crashing. */
   const invoke = (method: string, params: unknown, message: string, onDone?: () => void): void => {
@@ -290,90 +516,108 @@ function Dashboard({ client }: { client: RpcClient }) {
   };
 
   useEffect(() => {
-    let active = true;
+    const timer = setTimeout(() => setSplash(false), SPLASH_MS);
+    return () => clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    let live = true;
     mounted.current = true;
     const fail = (method: string, reason: unknown): void => {
-      if (active) setNotice({ text: `${method}: ${reasonText(reason)}`, tone: 'bad' });
+      if (live) setNotice({ text: `${method}: ${reasonText(reason)}`, tone: 'bad' });
     };
 
     const refreshDevices = (): void => {
       void client.call<{ devices: DeviceInfo[] }>('devices.list')
-        .then((result) => { if (active) setDevices(result.devices); })
+        .then((result) => { if (live) setDevices(result.devices); })
         .catch((reason: unknown) => fail('devices.list', reason));
     };
     refreshDevices();
     void client.call<{ entries: LogEntry[] }>('logs.list', { limit: 100 })
-      .then((result) => { if (active) setEntries(result.entries); })
+      .then((result) => { if (live) setEntries(result.entries); })
       .catch((reason: unknown) => fail('logs.list', reason));
+    // Project detection lives in @rnctl/plugin-doctor; the TUI only displays the result.
+    void client.call<ProjectInfo>('project.info', { cwd: process.cwd() })
+      .then((result) => { if (live) setProject(result); })
+      .catch((reason: unknown) => fail('project.info', reason));
 
     const offs = [
       client.on<LogEntry>('log:entry', (entry) => {
-        if (active) setEntries((current) => [...current.slice(-(MAX_LOGS - 1)), entry]);
+        if (live) setEntries((current) => [...current.slice(-(MAX_LOGS - 1)), entry]);
       }),
       client.on('device:list-updated', refreshDevices),
       client.on('device:booted', refreshDevices),
       client.on('device:shutdown', refreshDevices),
       client.on<ProcessExit>('process:exit', (event) => {
-        if (active && event.id === 'metro') setMetro({ status: 'stopped' });
+        if (live && event.id === 'metro') setMetro({ status: 'stopped' });
       }),
-      client.on('metro:ready', () => { if (active) setMetro({ status: 'running' }); }),
-      client.on('metro:stopped', () => { if (active) setMetro({ status: 'stopped' }); }),
+      client.on('metro:ready', () => { if (live) setMetro({ status: 'running' }); }),
+      client.on('metro:stopped', () => { if (live) setMetro({ status: 'stopped' }); }),
     ];
     return () => {
-      active = false;
+      live = false;
       mounted.current = false;
       for (const off of offs) off();
     };
   }, [client]);
 
-  useEffect(() => {
-    setSelected((current) => Math.min(current, Math.max(0, devices.length - 1)));
-  }, [devices.length]);
+  const groups = deviceGroups(devices.filter((device) => filter === 'all' || device.platform === filter));
+  const ordered = groups.flatMap((group) => group.devices);
+  const selectedDevice = devices.find((device) => device.id === selectedId) ?? ordered[0];
 
   useEffect(() => {
-    if (activeTab === 'devices' && devices[selected]) {
-      devicesScroll.current?.scrollChildIntoView(`dev-${selected}`, { align: 'nearest' });
+    if (ordered.length === 0) { if (selectedId !== null) setSelectedId(null); return; }
+    if (!ordered.some((device) => device.id === selectedId)) setSelectedId(ordered[0]!.id);
+  }, [ordered, selectedId]);
+
+  useEffect(() => {
+    if (active === 'devices' && selectedDevice) {
+      devicesScroll.current?.scrollChildIntoView(`dev-${selectedDevice.id}`, { align: 'nearest' });
     }
-  }, [activeTab, selected, devices.length]);
+  }, [active, selectedDevice, filter]);
 
   useEffect(() => {
-    if (activeTab !== 'environment' || healthRequested.current) return;
+    if (active !== 'environment' || healthRequested.current) return;
     healthRequested.current = true;
     void client.call<{ checks: HealthCheck[] }>('doctor.check')
       .then((result) => { if (mounted.current) setHealth(result.checks); })
       .catch((reason: unknown) => {
         if (mounted.current) setNotice({ text: `doctor.check: ${reasonText(reason)}`, tone: 'bad' });
       });
-  }, [activeTab, client]);
+  }, [active, client]);
+
+  const cycle = (step: number): void => {
+    setActive((current) => {
+      const index = SCREENS.findIndex((screen) => screen.id === current);
+      return SCREENS[(index + step + SCREENS.length) % SCREENS.length]!.id;
+    });
+  };
 
   useKeyboard((key: KeyEvent) => {
     if (key.ctrl || key.meta || key.eventType === 'release') return;
     const name = key.name;
     if (name === 'q') { renderer.destroy(); return; }
-    if (name === 'tab' || name === '[' || name === ']') {
+    if (name === 'tab' || name === '[' || name === 'left' || name === 'right') {
       key.preventDefault();
-      setActiveTab((current) => {
-        const index = TABS.findIndex((tab) => tab.id === current);
-        const step = name === '[' ? -1 : 1;
-        return TABS[(index + step + TABS.length) % TABS.length]!.id;
-      });
+      cycle(name === '[' || name === 'left' ? -1 : 1);
       return;
     }
     if (/^[1-4]$/.test(name)) {
       key.preventDefault();
-      setActiveTab(TABS[Number(name) - 1]!.id);
+      setActive(SCREENS[Number(name) - 1]!.id);
       return;
     }
     if (name === 'up' || name === 'down') {
-      if (activeTab === 'devices') {
+      if (active === 'devices' && ordered.length > 0) {
         key.preventDefault();
-        setSelected((current) => Math.max(0, Math.min(devices.length - 1, current + (name === 'up' ? -1 : 1))));
+        const index = ordered.findIndex((device) => device.id === selectedDevice?.id);
+        const next = Math.max(0, Math.min(ordered.length - 1, (index < 0 ? 0 : index) + (name === 'up' ? -1 : 1)));
+        setSelectedId(ordered[next]!.id);
       }
       return; // other screens keep focus so their scrollbox handles arrows
     }
-    if (name === 'i') { setActiveTab('environment'); return; }
-    const device = devices[selected];
-    const target = device ? device.name : 'no device selected';
+    if (name === 'i') { setActive('environment'); return; }
+    const target = selectedDevice ? selectedDevice.name : 'no device selected';
     switch (name) {
       case 'r': invoke('metro.reload', {}, `JS reload → ${target}`); break;
       case 'd': invoke('metro.devMenu', {}, `Dev menu → ${target}`); break;
@@ -384,14 +628,9 @@ function Dashboard({ client }: { client: RpcClient }) {
     }
   });
 
-  const selectTab = (id: TabId): void => setActiveTab(id);
-  const selectDevice = (index: number): void => {
-    setSelected(index);
-    setNotice({ text: `Selected ${devices[index]?.name ?? ''}`, tone: 'accent' });
-  };
-
+  const target = selectedDevice?.name ?? 'no device selected';
   let screen: ReactNode;
-  switch (activeTab) {
+  switch (active) {
     case 'logs':
       screen = createElement(LogsScreen, { entries });
       break;
@@ -400,16 +639,36 @@ function Dashboard({ client }: { client: RpcClient }) {
         metro,
         onStart: () => invoke('metro.start', { resetCache: false }, 'Metro start requested', () => setMetro({ status: 'running' })),
         onStop: () => invoke('metro.stop', {}, 'Metro stop requested', () => setMetro({ status: 'stopped' })),
-        onReload: () => invoke('metro.reload', {}, `JS reload → ${devices[selected]?.name ?? 'no device selected'}`),
-        onMenu: () => invoke('metro.devMenu', {}, `Dev menu → ${devices[selected]?.name ?? 'no device selected'}`),
+        onReload: () => invoke('metro.reload', {}, `JS reload → ${target}`),
+        onMenu: () => invoke('metro.devMenu', {}, `Dev menu → ${target}`),
       });
       break;
     case 'environment':
       screen = createElement(EnvironmentScreen, { health });
       break;
     default:
-      screen = createElement(DevicesScreen, { devices, selected, scrollRef: devicesScroll, onSelect: selectDevice });
+      screen = createElement(DevicesScreen, {
+        groups,
+        selectedId: selectedDevice?.id ?? null,
+        scrollRef: devicesScroll,
+        onSelect: (id: string) => {
+          setSelectedId(id);
+          setNotice({ text: `Selected ${devices.find((device) => device.id === id)?.name ?? ''}`, tone: 'accent' });
+        },
+        actions: createElement(DeviceActions, {
+          device: selectedDevice,
+          onReload: () => invoke('metro.reload', {}, `JS reload → ${target}`),
+          onMenu: () => invoke('metro.devMenu', {}, `Dev menu → ${target}`),
+          onStart: () => invoke('metro.start', { resetCache: false }, 'Metro start requested', () => setMetro({ status: 'running' })),
+          onStop: () => invoke('metro.stop', {}, 'Metro stop requested', () => setMetro({ status: 'stopped' })),
+        }),
+      });
   }
+
+  const counts: Record<Platform, number> = {
+    ios: devices.filter((device) => device.platform === 'ios').length,
+    android: devices.filter((device) => device.platform === 'android').length,
+  };
 
   return createElement(
     'box',
@@ -424,55 +683,38 @@ function Dashboard({ client }: { client: RpcClient }) {
       gap: 1,
       overflow: 'hidden',
     },
-    createElement(
-      'box',
-      {
-        flexShrink: 0,
-        height: 3,
-        border: true,
-        borderStyle: 'rounded',
-        borderColor: C.accent,
-        backgroundColor: C.panel,
-        paddingX: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-      },
-      createElement(
-        'box',
-        { flexDirection: 'row', gap: 1 },
-        t('◆ rnctl', { fg: C.accent, bold: true }),
-        t('// MISSION CONTROL', { fg: C.muted, dim: true }),
-      ),
-      createElement(
-        'box',
-        { flexDirection: 'row', gap: 1 },
-        t('● daemon', { fg: C.good }),
-        t('v0.1.0', { fg: C.muted, dim: true }),
-      ),
-    ),
-    createElement(
-      'box',
-      { flexShrink: 0, height: 3, flexDirection: 'row', gap: 1, paddingX: 1, alignItems: 'center' },
-      ...TABS.map((tab) => createElement(
+    createElement(Header, { splash, project }),
+    project && !project.isReactNative
+      ? createElement(
         'box',
         {
-          key: tab.id,
+          flexShrink: 0,
           height: 3,
-          paddingX: 2,
           border: true,
           borderStyle: 'rounded',
-          borderColor: activeTab === tab.id ? C.accent : C.border,
-          backgroundColor: activeTab === tab.id ? C.selected : C.panel,
-          justifyContent: 'center',
+          borderColor: C.warn,
+          backgroundColor: C.panel,
+          paddingX: 1,
+          flexDirection: 'row',
           alignItems: 'center',
-          onMouseUp: () => selectTab(tab.id),
+          gap: 1,
         },
-        t(`${tab.key} ${tab.label}`, { fg: activeTab === tab.id ? C.text : C.muted, bold: activeTab === tab.id }),
-      )),
-      t('  click a tab or press [/]', { fg: C.muted, dim: true, grow: true }),
+        t('⚠', { fg: C.warn, bold: true }),
+        t('Not a React Native / Expo project — rnctl works best in an RN project.', { fg: C.warn, truncate: true }),
+      )
+      : null,
+    createElement(
+      'box',
+      { flexGrow: 1, flexBasis: 0, minHeight: 0, flexDirection: 'row', gap: 1, overflow: 'hidden' },
+      createElement(SideMenu, {
+        active,
+        filter,
+        counts,
+        onScreen: setActive,
+        onFilter: setFilter,
+      }),
+      createElement('box', { flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden' }, screen),
     ),
-    createElement('box', { flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden' }, screen),
     createElement(
       'box',
       {
@@ -487,7 +729,7 @@ function Dashboard({ client }: { client: RpcClient }) {
         justifyContent: 'center',
       },
       t(`${notice.tone === 'bad' ? '✗' : '›'} ${notice.text}`, { fg: C[notice.tone], truncate: true }),
-      t('1-4 tabs · ↑↓ select/scroll · r reload · d menu · s/x metro · c clear · i env · q quit', {
+      t('1-4 / [ ] / ←→ screens · ↑↓ devices · r reload · d menu · s/x metro · c clear · i env · q quit', {
         fg: C.muted,
         dim: true,
         truncate: true,

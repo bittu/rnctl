@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { definePlugin, z } from '@rnctl/sdk';
 
 export interface DoctorCheck {
@@ -57,6 +59,28 @@ export default definePlugin({
         }
 
         return { healthy: checks.every((check) => check.ok), checks };
+      },
+    });
+
+    ctx.registerRpc('project.info', {
+      inputSchema: z.object({ cwd: z.string().optional() }),
+      handler: async ({ cwd }) => {
+        try {
+          const pkg = JSON.parse(readFileSync(join(cwd ?? process.cwd(), 'package.json'), 'utf8')) as {
+            name?: string;
+            dependencies?: Record<string, string>;
+            devDependencies?: Record<string, string>;
+            scripts?: Record<string, string>;
+          };
+          const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+          return {
+            name: pkg.name ?? 'unknown',
+            isReactNative: Boolean(deps['react-native'] ?? deps.expo ?? deps['@react-native/core']),
+            scripts: Object.entries(pkg.scripts ?? {}).map(([name, command]) => ({ name, command })),
+          };
+        } catch {
+          return { name: 'unknown', isReactNative: false, scripts: [] };
+        }
       },
     });
 
