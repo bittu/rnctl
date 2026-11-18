@@ -25,6 +25,8 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@rnctl/core": "workspace:*",
+    "@rnctl/sdk": "workspace:*",
     "ink": "^8.0.0",
     "react": "^19.3.1"
   },

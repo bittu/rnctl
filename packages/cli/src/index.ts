@@ -1,4 +1,4 @@
-import { createDaemon } from '@rnctl/core';
+import { createDaemon, RpcClient } from '@rnctl/core';
 import devices from '@rnctl/plugin-devices';
 import doctor from '@rnctl/plugin-doctor';
 import logs from '@rnctl/plugin-logs';
@@ -41,8 +41,13 @@ async function main(): Promise<void> {
     .action(async () => {});
   program
     .command('up')
-    .description('Boot a device, start Metro, and launch the app')
-    .action(async () => {});
+    .description('Start Metro and open the live dashboard')
+    .action(async () => {
+      await daemon.start();
+      const client = await RpcClient.connect(daemon.port());
+      await client.call('metro.start', { resetCache: false });
+      await renderDashboard(client);
+    });
   program
     .command('logs')
     .description('Stream unified native + JS logs')
@@ -51,7 +56,7 @@ async function main(): Promise<void> {
 
   program.action(async () => {
     await daemon.start();
-    renderDashboard();
+    await renderDashboard();
   });
 
   const shutdown = (): void => {

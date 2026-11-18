@@ -2,8 +2,13 @@ import type { CommandDefinition, Logger, PluginContext, RpcMethod } from '@rnctl
 import { TypedEventBus } from './event-bus.js';
 import { PluginLoader } from './plugin-loader.js';
 import { ProcessSupervisor } from './process-supervisor.js';
+import { startRpcServer, type RpcServer } from './rpc-server.js';
 
-export { TypedEventBus, PluginLoader, ProcessSupervisor };
+export { TypedEventBus } from './event-bus.js';
+export { PluginLoader } from './plugin-loader.js';
+export { ProcessSupervisor } from './process-supervisor.js';
+export { RpcClient, readDaemonPort } from './rpc-client.js';
+export { startRpcServer } from './rpc-server.js';
 
 const defaultLogger: Logger = {
   debug: () => {},
@@ -17,6 +22,7 @@ export interface Daemon {
   readonly loader: PluginLoader;
   commands(): readonly CommandDefinition[];
   rpcMethods(): ReadonlyMap<string, RpcMethod>;
+  port(): number | undefined;
   start(): Promise<void>;
   stop(): Promise<void>;
 }
@@ -36,16 +42,20 @@ export function createDaemon(logger: Logger = defaultLogger): Daemon {
   };
 
   const loader = new PluginLoader(ctx);
+  let server: RpcServer | undefined;
 
   return {
     ctx,
     loader,
     commands: () => [...commands.values()] as CommandDefinition[],
     rpcMethods: () => rpcMethods as ReadonlyMap<string, RpcMethod>,
-    // shortcut: IPC/WebSocket transport is not wired yet; RPC methods are in-process.
-    async start() {},
+    port: () => server?.port,
+    async start() {
+      server = await startRpcServer(bus, rpcMethods as ReadonlyMap<string, RpcMethod>);
+    },
     async stop() {
       await loader.unloadAll();
+      await server?.stop();
       await processes.shutdown();
     },
   };
