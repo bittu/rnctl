@@ -31,10 +31,10 @@ Unlike monolithic tools, **`rnctl` is 100% plugin-driven**. Every built-in capab
 
 ## 2. Tech Stack
 
-* **Runtime & Language:** Node.js (v20+) / Bun + TypeScript (Strict Mode)
+* **Runtime & Language:** Node.js (v26.4+ for the TUI/CLI) / Bun + TypeScript (Strict Mode)
 * **Monorepo Tooling:** pnpm Workspaces + Turborepo
 * **Background Daemon & IPC:** Fastify + WebSockets (`ws`) + Unix Domain Sockets / Localhost HTTP
-* **Terminal UI (TUI):** `ink` (React for CLIs) + `ink-ui`
+* **Terminal UI (TUI):** OpenTUI (`@opentui/core` + `@opentui/react`) — mouse, scrollboxes and tab/side-menu primitives; fixed viewport
 * **Local Web Dashboard:** React 19 + Vite + Tailwind CSS + Lucide Icons
 * **Process & CLI Execution:** `execa` + `node-pty` (for interactive terminal passthrough)
 * **Schema & Config Validation:** `zod`
@@ -80,6 +80,15 @@ Unlike monolithic tools, **`rnctl` is 100% plugin-driven**. Every built-in capab
 2. **Typed Event Bus:** Central nervous system where plugins publish events (e.g., `device:booted`, `log:entry`, `metro:error`) and subscribe to react to them.
 3. **Process Supervisor:** Wraps `execa` with automatic cleanup hooks (`SIGINT`/`SIGTERM`), restart policies, and stdout/stderr stream multiplexers.
 4. **Dual-Head Renderers:** Both the TUI (`rnctl`) and Web UI (`rnctl web`) are pure clients subscribing to daemon state and rendering plugin-contributed panels.
+
+### 3.1 Interaction & UX Specification (user-requested)
+
+* **Visual language:** dark mode only, OpenCode-inspired palette (deep slate backgrounds, cyan/teal accent, restrained green/amber/red status colors). Startup renders an ASCII `rnctl` logo with the caption `react native mission control`.
+* **Navigation:** a persistent **side menu** replaces the top tab bar. Only the active screen's content scrolls; header and side menu remain fixed. Shared state survives screen switches.
+* **Devices:** booted devices sort first; iOS and Android are separate submenus. Selecting a device opens an **action menu** — start/boot, install app, run app, stop/shutdown — rather than a passive list.
+* **Logs:** per-source log streams open as **separate tabs**, like OpenCode session tabs. Sources are offered contextually: Metro, Android app logcat, iOS app log stream, JS console, and network. Offer Android logs only when an Android app is running, and so on.
+* **Project awareness:** detect the working directory on startup; show a prominent warning when it is not a React Native/Expo project, and populate run/install actions from scripts in the project's `package.json`.
+* **Planned RPC surface:** `project.info`, `devices.boot|shutdown|installApp|runApp`, `logs.sources`, `logs.attach(source)`.
 
 ---
 
@@ -207,6 +216,16 @@ export default definePlugin({
 3. **`@rnctl/plugin-logs` (Unified Native + JS Log Multiplexer)**
    * Merges Metro JS logs, `adb logcat` (filtered to app PID), and `xcrun simctl log stream` into one chronological feed.
    * Color-coded source badges (`[METRO]`, `[iOS]`, `[ANDROID]`), regex/level filtering, and **automatic stack-trace collapsing** for noisy native errors.
+
+---
+
+### Phase 1.5: Interaction & Device/Project Actions (user-requested)
+*Goal: make the dashboard an actionable mission control rather than a read-only viewer.*
+
+13. **Side-menu navigation + dark theme:** OpenCode-inspired palette, persistent side menu, startup `rnctl` logo with "react native mission control" caption, and a prominent warning when opened outside an RN/Expo project.
+14. **Device action menus:** booted-first sorting, separate iOS/Android submenus, and per-device actions (start/boot, install app, run app, stop/shutdown) backed by `devices.*` RPCs.
+15. **Project-aware actions:** `project.info` reads `package.json` scripts and RN/Expo detection to populate run/install choices.
+16. **Contextual log tabs:** `logs.sources` / `logs.attach(source)` open Metro, Android, iOS, JS console and network streams in independent tabs; availability follows what is actually running.
 
 ---
 

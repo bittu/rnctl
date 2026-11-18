@@ -102,12 +102,14 @@ export default definePlugin({
 
 ## 5. Phased Implementation Roadmap (Current Progress)
 
-* **[x] Phase 0 — Foundation:** `@rnctl/sdk` and `@rnctl/plugin-devices` scaffolded.
-* **[ ] Phase 1 — Core MVP (Next Up):**
-  1. `@rnctl/core`: Implement `EventBus`, `ProcessSupervisor`, `PluginLoader`, and local WebSocket/HTTP JSON-RPC daemon (`~/.rnctl/daemon.sock` or localhost port).
-  2. `@rnctl/plugin-metro`: Start/stop Metro (`--reset-cache`), run `adb reverse tcp:8081 tcp:8081`, trigger `run-ios` / `run-android`, reload JS (`r`), open Dev Menu (`d`).
-  3. `@rnctl/plugin-logs`: Multiplex `stdout`/`stderr` from Metro, `adb logcat`, and `xcrun simctl spawn booted log stream` into unified `LogEntry` events.
-  4. `@rnctl/tui` & `rnctl` CLI: Interactive Ink terminal dashboard + CLI commands (`rnctl`, `rnctl devices`, `rnctl logs`).
+* **[x] Phase 0 — Foundation:** `@rnctl/sdk`, all workspace packages, root configs, CI and npm publishing scaffolded.
+* **[x] Phase 1 — Core MVP:**
+  1. `@rnctl/core`: `EventBus`, `ProcessSupervisor` (with stdin `write()`), `PluginLoader`, community plugin discovery, and a local WebSocket JSON-RPC daemon (`~/.rnctl/daemon.json`).
+  2. `@rnctl/plugin-metro`: Start/stop Metro (`--reset-cache`), reload JS (`r`) and Dev Menu (`d`) via stdin.
+  3. `@rnctl/plugin-logs`: Ring-buffer of `process:stdout`/`process:stderr` events exposed via `logs.list` / `logs.clear`.
+  4. `@rnctl/plugin-devices`, `@rnctl/plugin-doctor`: real simctl/adb discovery and environment probes.
+  5. `@rnctl/tui` & `rnctl` CLI: OpenTUI dashboard with fixed viewport, scrollboxes, mouse support and tabbed screens; CLI commands (`rnctl`, `rnctl devices`, `rnctl metro`, `rnctl nuke`, `rnctl web`, `rnctl up`).
+* **[ ] Phase 1.5 — Interaction & UX (user-requested, see section 7):** side menu, per-device action menus, per-source log tabs, project/package.json awareness, startup logo and non-RN warning.
 * **[ ] Phase 2 — Daily Accelerators:** Multi-device broadcast commands (simultaneous reload/deep-link/dark-mode), GPS/network presets, and `@rnctl/plugin-doctor` (`rnctl nuke` cache cleaner).
 * **[ ] Phase 3 — Deep Inspection:** Zero-SDK network request inspector, AsyncStorage/MMKV viewer, Hermes crash/FPS profiler.
 * **[ ] Phase 4 — AI & Ecosystem:** Built-in MCP server (`@rnctl/plugin-mcp`) exposing live logs and device actions to AI coding agents, plus `rnctl plugin create <name>`.
@@ -121,3 +123,18 @@ Before concluding any task, AI agents working in this repository must verify:
 2. `pnpm build` succeeds cleanly via Turborepo.
 3. Any new RPC method includes a `zod` `inputSchema`.
 4. Any new long-running CLI process uses `ctx.processes.spawn` with a corresponding cleanup path.
+
+---
+
+## 7. Interaction & UX Direction (user-requested)
+
+These are product requirements gathered from hands-on UI reviews. Implement as plugins/RPC methods; never hardcode feature logic into `@rnctl/core` or the TUI.
+
+* **Visual language:** dark theme only, palette inspired by OpenCode's TUI (deep slate backgrounds, cyan/teal accents, restrained green/amber/red status colors). Startup shows an ASCII art `rnctl` logo with the caption `react native mission control`.
+* **Navigation:** replace the top tab bar with a persistent side menu. Screens switch on selection; shared state (logs, selection, health) survives switching. The active screen owns its scroll region; the header and side menu never scroll off-screen.
+* **Devices:** booted devices sort to the top. iOS and Android are separate submenus under Devices. Selecting a device opens an action menu rather than a static list: start/boot if stopped, install app, run app, stop/shutdown if running, plus device-specific actions where supported.
+* **Logs:** logs are per-source and each source opens in its own tab, like OpenCode opens a new session tab. Sources: Metro, Android (app-specific logcat), iOS (app-specific `simctl` log stream), JS console, and network. Offer a source only when relevant (e.g. Android logs only when an Android app is running).
+* **Project awareness:** detect the current project on startup. If it is not a React Native/Expo project, show a prominent warning that rnctl works best in an RN project. Populate run/install actions from scripts in the project's `package.json`.
+* **Suggested RPC namespaces:** `project.info` (isReactNative, scripts, package name), `devices.boot|shutdown|installApp|runApp`, `logs.sources` and `logs.attach(source)`.
+
+Phase 1.5 completes these; per-source network/console inspection builds on Phase 3.
