@@ -53,6 +53,10 @@ importers:
       commander:
         specifier: ^15.1.0
         version: 15.1.0
+    devDependencies:
+      '@rnctl/web':
+        specifier: workspace:*
+        version: link:../web
 
   packages/core:
     dependencies:

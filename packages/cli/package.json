@@ -20,6 +20,9 @@
     "test": "vitest run --passWithNoTests",
     "clean": "rm -rf dist"
   },
+  "devDependencies": {
+    "@rnctl/web": "workspace:*"
+  },
   "dependencies": {
     "@rnctl/core": "workspace:*",
     "@rnctl/plugin-devices": "workspace:*",

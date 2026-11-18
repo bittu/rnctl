@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { createDaemon, RpcClient } from '@rnctl/core';
 import devices from '@rnctl/plugin-devices';
 import doctor from '@rnctl/plugin-doctor';
@@ -6,6 +7,14 @@ import metro from '@rnctl/plugin-metro';
 import type { Logger } from '@rnctl/sdk';
 import { renderDashboard } from '@rnctl/tui';
 import { Command } from 'commander';
+import { startWebServer, type WebServer } from './web-server.js';
+
+function openBrowser(url: string): void {
+  const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
+  const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
+  const child = spawn(command, args, { stdio: 'ignore', detached: true });
+  child.unref();
+}
 
 const logger: Logger = {
   debug: (message) => { if (process.env.RNCTL_DEBUG) console.debug(message); },
@@ -16,6 +25,7 @@ const logger: Logger = {
 
 async function main(): Promise<void> {
   const daemon = createDaemon(logger);
+  let webServer: WebServer | undefined;
   for (const plugin of [devices, metro, logs, doctor]) {
     await daemon.loader.load(plugin);
   }
@@ -34,11 +44,17 @@ async function main(): Promise<void> {
       .action(async (args: string[]) => command.action(args, daemon.ctx));
   }
 
-  // shortcut: web/up/logs are shell placeholders until the daemon transport lands.
   program
     .command('web')
     .description('Open the local web dashboard')
-    .action(async () => {});
+    .action(async () => {
+      await daemon.start();
+      webServer = await startWebServer(daemon.port() ?? 0);
+      const url = `http://127.0.0.1:${webServer.port}`;
+      logger.info(`Dashboard: ${url}`);
+      if (!process.env.RNCTL_NO_BROWSER) openBrowser(url);
+      await new Promise<void>(() => {});
+    });
   program
     .command('up')
     .description('Start Metro and open the live dashboard')
@@ -48,6 +64,7 @@ async function main(): Promise<void> {
       await client.call('metro.start', { resetCache: false });
       await renderDashboard(client);
     });
+  // shortcut: the logs command will stream via logs.list once live tailing lands.
   program
     .command('logs')
     .description('Stream unified native + JS logs')
@@ -60,7 +77,10 @@ async function main(): Promise<void> {
   });
 
   const shutdown = (): void => {
-    void daemon.stop().finally(() => process.exit(0));
+    void (async () => {
+      await webServer?.stop();
+      await daemon.stop();
+    })().finally(() => process.exit(0));
   };
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
