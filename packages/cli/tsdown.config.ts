@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsdown';
 
 export default defineConfig({
-  entry: { rnctl: 'src/index.ts' },
+  entry: { bin: 'src/index.ts' },
   banner: { js: '#!/usr/bin/env node' },
   dts: true,
   clean: true,

@@ -1,11 +1,11 @@
 {
-  "name": "rnctl-cli",
+  "name": "@rnctl/cli",
   "version": "0.1.0",
   "description": "One mission control for React Native",
   "type": "module",
   "bin": {
-    "rnctl": "./dist/rnctl.js",
-    "rnc": "./dist/rnctl.js"
+    "rnctl": "./dist/bin.js",
+    "rnc": "./dist/bin.js"
   },
   "files": [
     "dist"
