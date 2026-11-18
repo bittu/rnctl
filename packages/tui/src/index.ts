@@ -34,6 +34,15 @@ interface ProjectInfo {
   scripts: Array<{ name: string; command: string }>;
 }
 interface DeviceGroup { platform: Platform; devices: DeviceInfo[] }
+type LogSourceId = 'metro' | 'console' | 'android' | 'ios' | 'network';
+interface LogSource { id: LogSourceId; label: string; available: boolean; reason?: string }
+interface LogSession {
+  sessionId: string;
+  source: LogSourceId;
+  label: string;
+  entries: LogEntry[];
+}
+interface AttachResult { sessionId: string; started: boolean; message: string }
 
 const MAX_LOGS = 200;
 const SCREENS: ReadonlyArray<{ id: ScreenId; label: string; key: string }> = [
@@ -270,33 +279,95 @@ function logTone(level: LogEntry['level']): Tone {
   return level === 'error' ? 'bad' : level === 'warn' ? 'warn' : level === 'debug' ? 'muted' : 'accent';
 }
 
-function LogsScreen({ entries }: { entries: LogEntry[] }): ReactNode {
+function LogsScreen({ entries, sources, sessions, activeSessionId, selectedSourceIndex, compact, onSelectTab, onCloseTab, onAttachSource, onSelectSource }: {
+  entries: LogEntry[];
+  sources: LogSource[];
+  sessions: LogSession[];
+  activeSessionId: string | null;
+  selectedSourceIndex: number;
+  compact: boolean;
+  onSelectTab: (sessionId: string | null) => void;
+  onCloseTab: (sessionId: string) => void;
+  onAttachSource: (source: LogSource) => void;
+  onSelectSource: (index: number) => void;
+}): ReactNode {
+  const visible = activeSessionId === null ? entries : sessions.find((session) => session.sessionId === activeSessionId)?.entries ?? [];
+  const chip = (key: string, label: string, active: boolean, tone: Tone, onPress: () => void): ReactNode => createElement(
+    'box',
+    {
+      key,
+      height: 1,
+      flexDirection: 'row',
+      gap: 1,
+      paddingX: 1,
+      flexShrink: 0,
+      backgroundColor: active ? C.selected : undefined,
+      onMouseUp: onPress,
+    },
+    t(label, { fg: active ? C.text : C[tone], bold: active, truncate: true }),
+  );
+  const shortLabel = (source: LogSource): string => {
+    if (source.id === 'console') return 'JS';
+    if (compact) return source.id === 'android' ? 'And' : source.id === 'network' ? 'Net' : source.label;
+    return source.id === 'android' ? 'Android' : source.label;
+  };
   return panel(
     'Live logs',
-    `${entries.length} entries`,
+    `${visible.length} entries · ${sessions.length} tabs`,
     createElement(
-      'scrollbox',
-      {
-        flexGrow: 1,
-        flexBasis: 0,
-        minHeight: 0,
-        overflow: 'hidden',
-        scrollY: true,
-        stickyScroll: true,
-        stickyStart: 'bottom',
-        focused: true,
-        scrollbarOptions: { visible: false, showArrows: false },
-      },
-      entries.length === 0
-        ? t('No log entries yet. Start Metro to see activity here.', { fg: C.muted, dim: true })
-        : entries.map((entry) => createElement(
-          'box',
-          { key: entry.id, flexDirection: 'row', gap: 1, height: 1, flexShrink: 0 },
-          t(clock(entry.timestamp), { fg: C.muted, dim: true }),
-          t(entry.level.slice(0, 5).toUpperCase(), { fg: C[logTone(entry.level)] }),
-          t(entry.source, { fg: C.muted }),
-          t(cut(entry.message, 120), { grow: true, truncate: true }),
+      'box',
+      { flexDirection: 'column', flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden' },
+      createElement(
+        'box',
+        { flexDirection: 'row', gap: 1, flexShrink: 0 },
+        chip('all', activeSessionId === null ? '▸ All' : 'All', activeSessionId === null, 'accent', () => onSelectTab(null)),
+        ...sessions.flatMap((session) => [
+          chip(
+            `tab-${session.sessionId}`,
+            `${session.sessionId === activeSessionId ? '▸ ' : ''}${session.label}`,
+            session.sessionId === activeSessionId,
+            'accent',
+            () => onSelectTab(session.sessionId),
+          ),
+          chip(`close-${session.sessionId}`, '×', false, 'muted', () => onCloseTab(session.sessionId)),
+        ]),
+        chip('new', '+ new', false, 'muted', () => onSelectSource(selectedSourceIndex)),
+      ),
+      createElement(
+        'box',
+        { flexDirection: 'row', gap: 1, flexShrink: 0 },
+        sources.map((source, index) => chip(
+          `source-${source.id}`,
+          `${source.available ? '' : '⊘ '}${index + 1} ${shortLabel(source)}`,
+          index === selectedSourceIndex && source.available,
+          source.available ? 'text' : 'muted',
+          () => { onSelectSource(index); onAttachSource(source); },
         )),
+      ),
+      createElement(
+        'scrollbox',
+        {
+          flexGrow: 1,
+          flexBasis: 0,
+          minHeight: 0,
+          overflow: 'hidden',
+          scrollY: true,
+          stickyScroll: true,
+          stickyStart: 'bottom',
+          focused: true,
+          scrollbarOptions: { visible: false, showArrows: false },
+        },
+        visible.length === 0
+          ? t('No entries in this stream yet. Attach a source or start Metro.', { fg: C.muted, dim: true })
+          : visible.map((entry) => createElement(
+            'box',
+            { key: entry.id, flexDirection: 'row', gap: 1, height: 1, flexShrink: 0 },
+            t(clock(entry.timestamp), { fg: C.muted, dim: true }),
+            t(entry.level.slice(0, 5).toUpperCase(), { fg: C[logTone(entry.level)] }),
+            t(entry.source, { fg: C.muted }),
+            t(cut(entry.message, 120), { grow: true, truncate: true }),
+          )),
+      ),
     ),
   );
 }
@@ -499,7 +570,85 @@ function Dashboard({ client }: { client: RpcClient }) {
   const [prompt, setPrompt] = useState<PromptKind | null>(null);
   const [promptValue, setPromptValue] = useState('');
   const [selectedScript, setSelectedScript] = useState<string | null>(null);
+  const [sources, setSources] = useState<LogSource[]>([]);
+  const [sessions, setSessions] = useState<LogSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [selectedSourceIndex, setSelectedSourceIndex] = useState(0);
   const columns = renderer.width || 80;
+
+  const refreshSources = (): void => {
+    void client.call<{ sources: LogSource[] }>('logs.sources')
+      .then((result) => {
+        if (!mounted.current) return;
+        setSources(result.sources);
+        setSelectedSourceIndex((current) => Math.min(current, Math.max(0, result.sources.length - 1)));
+      })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `logs.sources: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const loadSession = (sessionId: string): void => {
+    void client.call<{ entries: LogEntry[] }>('logs.list', { sessionId, limit: MAX_LOGS })
+      .then((result) => {
+        if (mounted.current) setSessions((current) => current.map((session) =>
+          session.sessionId === sessionId ? { ...session, entries: result.entries } : session));
+      })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `logs.list: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const attachSource = (source: LogSource): void => {
+    if (!source.available) {
+      setNotice({ text: source.reason ?? `${source.label} is unavailable`, tone: 'warn' });
+      return;
+    }
+    void client.call<AttachResult>('logs.attach', { source: source.id })
+      .then((result) => {
+        if (!mounted.current) return;
+        setNotice({ text: result.message || `${source.label}: ${result.started ? 'attached' : 'failed'}`, tone: result.started ? 'good' : 'bad' });
+        if (!result.started || !result.sessionId) return;
+        setSessions((current) => [...current, {
+          sessionId: result.sessionId,
+          source: source.id,
+          label: source.label,
+          entries: [],
+        }]);
+        setActiveSessionId(result.sessionId);
+        loadSession(result.sessionId);
+      })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `logs.attach: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const closeTab = (sessionId: string): void => {
+    void client.call<{ detached: boolean }>('logs.detach', { sessionId })
+      .then((result) => {
+        if (!mounted.current) return;
+        setNotice({ text: result.detached ? `Detached ${sessionId}` : `Could not detach ${sessionId}`, tone: result.detached ? 'good' : 'bad' });
+        if (!result.detached) return;
+        setSessions((current) => current.filter((session) => session.sessionId !== sessionId));
+        setActiveSessionId((current) => current === sessionId ? null : current);
+      })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `logs.detach: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const clearLogs = (): void => {
+    void client.call<{ cleared: true }>('logs.clear', {})
+      .then((result) => {
+        if (!mounted.current) return;
+        setNotice({ text: result.cleared ? 'Logs cleared' : 'Clear failed', tone: result.cleared ? 'good' : 'bad' });
+        setEntries([]);
+        setSessions((current) => current.map((session) => ({ ...session, entries: [] })));
+      })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `logs.clear: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
 
   const runScript = (name: string): void => {
     void client.call<{ started: boolean; pid?: number; message: string }>('project.runScript', { name, cwd: process.cwd() })
@@ -563,7 +712,14 @@ function Dashboard({ client }: { client: RpcClient }) {
 
     const offs = [
       client.on<LogEntry>('log:entry', (entry) => {
-        if (live) setEntries((current) => [...current.slice(-(MAX_LOGS - 1)), entry]);
+        if (!live) return;
+        setEntries((current) => [...current.slice(-(MAX_LOGS - 1)), entry]);
+        setSessions((current) => current.map((session) => {
+          const matches = (entry.source === 'metro' && (session.source === 'metro' || session.source === 'console'))
+            || entry.source === `logcat:${session.sessionId}`
+            || entry.source === `simlog:${session.sessionId}`;
+          return matches ? { ...session, entries: [...session.entries.slice(-(MAX_LOGS - 1)), entry] } : session;
+        }));
       }),
       client.on('device:list-updated', refreshDevices),
       client.on('device:booted', refreshDevices),
@@ -612,6 +768,18 @@ function Dashboard({ client }: { client: RpcClient }) {
       });
   }, [active, client]);
 
+  useEffect(() => {
+    if (active === 'logs') refreshSources();
+  }, [active, client]);
+
+  const tabIds: Array<string | null> = [null, ...sessions.map((session) => session.sessionId)];
+  const cycleTabs = (step: number): void => {
+    const index = tabIds.indexOf(activeSessionId);
+    const next = tabIds[(index + step + tabIds.length) % tabIds.length] ?? null;
+    setActiveSessionId(next);
+    if (next) loadSession(next);
+  };
+
   const cycle = (step: number): void => {
     setActive((current) => {
       const index = SCREENS.findIndex((screen) => screen.id === current);
@@ -654,9 +822,19 @@ function Dashboard({ client }: { client: RpcClient }) {
       return;
     }
     if (name === 'q') { renderer.destroy(); return; }
+    if (name === 'tab' || name === '[' || name === ']') {
+      if (active === 'logs') { key.preventDefault(); cycleTabs(name === '[' ? -1 : 1); return; }
+    }
     if (name === 'tab' || name === '[' || name === 'left' || name === 'right') {
       key.preventDefault();
       cycle(name === '[' || name === 'left' ? -1 : 1);
+      return;
+    }
+    if (active === 'logs' && /^[1-5]$/.test(name)) {
+      key.preventDefault();
+      const index = Number(name) - 1;
+      setSelectedSourceIndex(index);
+      if (sources[index]) attachSource(sources[index]!);
       return;
     }
     if (/^[1-4]$/.test(name)) {
@@ -676,14 +854,24 @@ function Dashboard({ client }: { client: RpcClient }) {
         const index = scripts.findIndex((script) => script.name === selectedScript);
         const next = Math.max(0, Math.min(scripts.length - 1, (index < 0 ? 0 : index) + (name === 'up' ? -1 : 1)));
         setSelectedScript(scripts[next]!.name);
+      } else if (active === 'logs' && sources.length > 0) {
+        key.preventDefault();
+        setSelectedSourceIndex((current) => Math.max(0, Math.min(sources.length - 1, current + (name === 'up' ? -1 : 1))));
       }
       return; // other screens keep focus so their scrollbox handles arrows
     }
     if (name === 'return' || name === 'enter') {
       if (active === 'metro' && selectedScript) { key.preventDefault(); runScript(selectedScript); }
+      else if (active === 'logs' && sources[selectedSourceIndex]) { key.preventDefault(); attachSource(sources[selectedSourceIndex]!); }
       return;
     }
     if (name === 'i') { setActive('environment'); return; }
+    if (active === 'logs' && name === 'w') {
+      key.preventDefault();
+      if (activeSessionId) closeTab(activeSessionId);
+      else setNotice({ text: 'No session tab to close', tone: 'muted' });
+      return;
+    }
     if (active === 'devices' && selectedDevice) {
       const params = { id: selectedDevice.id, platform: selectedDevice.platform };
       if (name === 'b') { invokeDevice('devices.boot', params); return; }
@@ -697,7 +885,7 @@ function Dashboard({ client }: { client: RpcClient }) {
       case 'd': invoke('metro.devMenu', {}, `Dev menu → ${target}`); break;
       case 's': invoke('metro.start', { resetCache: false }, 'Metro start requested', () => setMetro({ status: 'running' })); break;
       case 'x': invoke('metro.stop', {}, 'Metro stop requested', () => setMetro({ status: 'stopped' })); break;
-      case 'c': invoke('logs.clear', {}, 'Logs cleared', () => setEntries([])); break;
+      case 'c': clearLogs(); break;
       default: break;
     }
   });
@@ -706,7 +894,21 @@ function Dashboard({ client }: { client: RpcClient }) {
   let screen: ReactNode;
   switch (active) {
     case 'logs':
-      screen = createElement(LogsScreen, { entries });
+      screen = createElement(LogsScreen, {
+        entries,
+        sources,
+        sessions,
+        activeSessionId,
+        selectedSourceIndex,
+        compact: columns < 120,
+        onSelectTab: (sessionId: string | null) => {
+          setActiveSessionId(sessionId);
+          if (sessionId) loadSession(sessionId);
+        },
+        onCloseTab: closeTab,
+        onAttachSource: attachSource,
+        onSelectSource: setSelectedSourceIndex,
+      });
       break;
     case 'metro':
       screen = createElement(MetroScreen, {
@@ -798,14 +1000,19 @@ function Dashboard({ client }: { client: RpcClient }) {
       'box',
       {
         flexShrink: 0,
-        height: 2,
+        height: 3,
         backgroundColor: C.surface,
         paddingX: 2,
         flexDirection: 'column',
         justifyContent: 'center',
       },
       t(`${notice.tone === 'bad' ? '✗' : '›'} ${notice.text}`, { fg: C[notice.tone], truncate: true }),
-      t('1-4/[ ]/←→ screens · ↑↓ · b boot · p down · f install · a run · r/d/s/x · q quit', {
+      t('1-4/←→ screens · ↑↓ · b boot · p down · f install · a run · r/d/s/x · q quit', {
+        fg: C.muted,
+        dim: true,
+        truncate: true,
+      }),
+      t('Logs: 1-5 source · ↑↓ pick · Enter attach · Tab/[ ] tabs · w close · c clear', {
         fg: C.muted,
         dim: true,
         truncate: true,

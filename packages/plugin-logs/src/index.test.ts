@@ -16,7 +16,13 @@ function setup() {
       emit: async (topic: string, payload: unknown) => { emitted.push({ topic, payload }); },
     },
     logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    processes: { spawn: vi.fn(), exec: vi.fn(), stop: vi.fn() },
+    processes: {
+      spawn: vi.fn(async (id: string) => ({ id, pid: 7 })),
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 })),
+      stop: vi.fn(async () => {}),
+      write: vi.fn(async () => {}),
+      isRunning: vi.fn(async () => false),
+    },
     registerRpc: (name: string, method: RpcMethod) => { rpcs.set(name, method); },
     registerCommand: vi.fn(),
   } as unknown as PluginContext;
@@ -53,5 +59,44 @@ describe('plugin-logs', () => {
     expect(await rpcs.get('logs.clear')!.handler({})).toEqual({ cleared: true });
     const empty = await rpcs.get('logs.list')!.handler({ level: undefined, limit: 10 });
     expect((empty as { entries: LogEntry[] }).entries).toEqual([]);
+  });
+
+  it('attaches per-source sessions and filters their entries', async () => {
+    const { ctx, listeners, rpcs } = setup();
+    await plugin.setup(ctx);
+
+    const sources = await rpcs.get('logs.sources')!.handler({}) as {
+      sources: Array<{ id: string; available: boolean; reason?: string }>;
+    };
+    expect(sources.sources.map((source) => source.id)).toEqual(['metro', 'console', 'android', 'ios', 'network']);
+    expect(sources.sources.find((source) => source.id === 'network')?.available).toBe(false);
+
+    const attached = await rpcs.get('logs.attach')!.handler({ source: 'android' }) as {
+      sessionId: string;
+      started: boolean;
+    };
+    expect(attached.started).toBe(true);
+    listeners.get('process:stdout')!({ id: 'logcat:android-1', chunk: 'native line\n' });
+    listeners.get('process:stdout')!({ id: 'metro', chunk: 'js line\n' });
+
+    const sessionEntries = await rpcs.get('logs.list')!.handler({
+      level: undefined,
+      limit: 100,
+      sessionId: attached.sessionId,
+    }) as { entries: LogEntry[] };
+    expect(sessionEntries.entries.map((entry) => entry.message)).toEqual(['native line']);
+
+    expect(await rpcs.get('logs.detach')!.handler({ sessionId: attached.sessionId })).toEqual({ detached: true });
+    expect(await rpcs.get('logs.detach')!.handler({ sessionId: attached.sessionId })).toEqual({ detached: false });
+  });
+
+  it('refuses to attach a network session', async () => {
+    const { ctx, rpcs } = setup();
+    await plugin.setup(ctx);
+    const result = await rpcs.get('logs.attach')!.handler({ source: 'network' }) as {
+      sessionId: string;
+      started: boolean;
+    };
+    expect(result).toEqual({ sessionId: '', started: false, message: expect.any(String) });
   });
 });

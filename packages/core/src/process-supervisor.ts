@@ -79,6 +79,11 @@ export class ProcessSupervisor implements Processes {
     child.stdin.write(input);
   }
 
+  async isRunning(id: string): Promise<boolean> {
+    const child = this.handles.get(id);
+    return child !== undefined && child.exitCode === null;
+  }
+
   get(id: string): ProcessHandle | undefined {
     const child = this.handles.get(id);
     return child ? { id, pid: child.pid } : undefined;

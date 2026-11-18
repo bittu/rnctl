@@ -75,6 +75,7 @@ export interface Processes {
   exec(command: string, args?: string[], options?: SpawnOptions): Promise<ExecResult>;
   stop(id: string, signal?: string): Promise<void>;
   write(id: string, input: string): Promise<void>;
+  isRunning(id: string): Promise<boolean>;
 }
 
 export interface RpcMethod<TInput = unknown, TOutput = unknown> {
