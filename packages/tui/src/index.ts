@@ -309,8 +309,13 @@ function metroAction(label: string, tone: Tone, onPress: () => void): ReactNode 
   );
 }
 
-function MetroScreen({ metro, onStart, onStop, onReload, onMenu }: {
+function MetroScreen({ metro, scripts, selectedScript, commandWidth, onSelectScript, onRunScript, onStart, onStop, onReload, onMenu }: {
   metro: { status: MetroStatus; pid?: number };
+  scripts: ProjectInfo['scripts'];
+  selectedScript: string | null;
+  commandWidth: number;
+  onSelectScript: (name: string) => void;
+  onRunScript: (name: string) => void;
   onStart: () => void;
   onStop: () => void;
   onReload: () => void;
@@ -326,7 +331,7 @@ function MetroScreen({ metro, onStart, onStop, onReload, onMenu }: {
       { flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden', scrollY: true, focused: true, scrollbarOptions: { visible: false, showArrows: false } },
       createElement(
         'box',
-        { flexDirection: 'column', gap: 1, flexShrink: 0 },
+        { flexDirection: 'column', flexShrink: 0 },
         createElement(
           'box',
           { flexDirection: 'row', gap: 1, flexShrink: 0 },
@@ -342,7 +347,26 @@ function MetroScreen({ metro, onStart, onStop, onReload, onMenu }: {
           metroAction('Reload', 'accent', onReload),
           metroAction('Dev menu', 'warn', onMenu),
         ),
-        t('Click an action, or use s / x / r / d.', { fg: C.muted, dim: true }),
+        t('Project scripts', { fg: C.muted, bold: true }),
+        scripts.length === 0
+          ? t('No package.json scripts found', { fg: C.muted, dim: true })
+          : scripts.map((script) => createElement(
+            'box',
+            {
+              key: `script-${script.name}`,
+              height: 1,
+              flexDirection: 'row',
+              gap: 1,
+              paddingX: 1,
+              flexShrink: 0,
+              backgroundColor: selectedScript === script.name ? C.selected : undefined,
+              onMouseUp: () => { onSelectScript(script.name); onRunScript(script.name); },
+            },
+            t(selectedScript === script.name ? '▸' : ' ', { fg: selectedScript === script.name ? C.accent : C.muted, shrink: true }),
+            t(cut(script.name, 18), { fg: selectedScript === script.name ? C.text : C.muted, bold: selectedScript === script.name, shrink: true }),
+            t(cut(script.command, commandWidth), { fg: C.muted, dim: true, shrink: true }),
+          )),
+        t('Actions: s/x/r/d · Scripts: ↑↓ select · Enter run · click', { fg: C.muted, dim: true }),
       ),
     ),
   );
@@ -474,6 +498,18 @@ function Dashboard({ client }: { client: RpcClient }) {
   const [active, setActive] = useState<ScreenId>('devices');
   const [prompt, setPrompt] = useState<PromptKind | null>(null);
   const [promptValue, setPromptValue] = useState('');
+  const [selectedScript, setSelectedScript] = useState<string | null>(null);
+  const columns = renderer.width || 80;
+
+  const runScript = (name: string): void => {
+    void client.call<{ started: boolean; pid?: number; message: string }>('project.runScript', { name, cwd: process.cwd() })
+      .then((result) => {
+        if (mounted.current) setNotice({ text: result.message || name, tone: result.started ? 'good' : 'bad' });
+      })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `project.runScript: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
 
   const refreshDevices = (): void => {
     void client.call<{ devices: DeviceInfo[] }>('devices.list')
@@ -555,6 +591,12 @@ function Dashboard({ client }: { client: RpcClient }) {
   }, [ordered, selectedId]);
 
   useEffect(() => {
+    const scripts = project?.scripts ?? [];
+    if (scripts.length === 0) { if (selectedScript !== null) setSelectedScript(null); return; }
+    if (!scripts.some((script) => script.name === selectedScript)) setSelectedScript(scripts[0]!.name);
+  }, [project, selectedScript]);
+
+  useEffect(() => {
     if (active === 'devices' && selectedDevice) {
       devicesScroll.current?.scrollChildIntoView(`dev-${selectedDevice.id}`, { align: 'nearest' });
     }
@@ -628,8 +670,18 @@ function Dashboard({ client }: { client: RpcClient }) {
         const index = ordered.findIndex((device) => device.id === selectedDevice?.id);
         const next = Math.max(0, Math.min(ordered.length - 1, (index < 0 ? 0 : index) + (name === 'up' ? -1 : 1)));
         setSelectedId(ordered[next]!.id);
+      } else if (active === 'metro' && project && project.scripts.length > 0) {
+        key.preventDefault();
+        const scripts = project.scripts;
+        const index = scripts.findIndex((script) => script.name === selectedScript);
+        const next = Math.max(0, Math.min(scripts.length - 1, (index < 0 ? 0 : index) + (name === 'up' ? -1 : 1)));
+        setSelectedScript(scripts[next]!.name);
       }
       return; // other screens keep focus so their scrollbox handles arrows
+    }
+    if (name === 'return' || name === 'enter') {
+      if (active === 'metro' && selectedScript) { key.preventDefault(); runScript(selectedScript); }
+      return;
     }
     if (name === 'i') { setActive('environment'); return; }
     if (active === 'devices' && selectedDevice) {
@@ -659,6 +711,11 @@ function Dashboard({ client }: { client: RpcClient }) {
     case 'metro':
       screen = createElement(MetroScreen, {
         metro,
+        scripts: project?.scripts ?? [],
+        selectedScript,
+        commandWidth: columns >= 120 ? 64 : 28,
+        onSelectScript: setSelectedScript,
+        onRunScript: runScript,
         onStart: () => invoke('metro.start', { resetCache: false }, 'Metro start requested', () => setMetro({ status: 'running' })),
         onStop: () => invoke('metro.stop', {}, 'Metro stop requested', () => setMetro({ status: 'stopped' })),
         onReload: () => invoke('metro.reload', {}, `JS reload → ${target}`),
@@ -670,7 +727,6 @@ function Dashboard({ client }: { client: RpcClient }) {
       break;
     default:
       // Keep the device name + platform + state on one line: 27 cols of chrome, 19 of row overhead.
-      const columns = renderer.width || 80;
       const actionWidth = columns >= 120 ? 28 : 20;
       const nameWidth = Math.max(10, Math.min(48, columns - 27 - actionWidth - 19));
       screen = createElement(DevicesScreen, {

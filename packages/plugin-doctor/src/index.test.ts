@@ -35,6 +35,23 @@ describe('plugin-doctor', () => {
     expect(result.healthy).toBe(false);
   });
 
+  it('runs a package.json script through the process gateway', async () => {
+    const spawn = vi.fn(async (id: string) => ({ id, pid: 4242 }));
+    let rpc: RpcMethod | undefined;
+    const ctx = {
+      bus: { on: vi.fn(), off: vi.fn(), emit: vi.fn(), onAny: vi.fn() },
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      processes: { spawn, exec: vi.fn(), stop: vi.fn(), write: vi.fn() },
+      registerRpc: (name: string, method: RpcMethod) => { if (name === 'project.runScript') rpc = method; },
+      registerCommand: vi.fn(),
+    } as unknown as PluginContext;
+
+    await plugin.setup(ctx);
+    const result = await rpc!.handler({ name: 'ios', cwd: '/app' });
+    expect(result).toEqual({ started: true, pid: 4242, message: 'npm run ios' });
+    expect(spawn).toHaveBeenCalledWith('script:ios', 'npm', ['run', 'ios'], { cwd: '/app' });
+  });
+
   it('reads project metadata and scripts from package.json', async () => {
     const root = mkdtempSync(join(tmpdir(), 'rnctl-project-'));
     try {

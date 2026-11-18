@@ -84,6 +84,23 @@ export default definePlugin({
       },
     });
 
+    ctx.registerRpc('project.runScript', {
+      inputSchema: z.object({ name: z.string(), cwd: z.string().optional() }),
+      handler: async ({ name, cwd }) => {
+        try {
+          const handle = await ctx.processes.spawn(
+            `script:${name}`,
+            'npm',
+            ['run', name],
+            { cwd },
+          );
+          return { started: true, pid: handle.pid, message: `npm run ${name}` };
+        } catch (error) {
+          return { started: false, pid: undefined, message: String(error) };
+        }
+      },
+    });
+
     ctx.registerCommand({
       name: 'nuke',
       description: 'Clean caches and build artifacts',
