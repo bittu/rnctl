@@ -33,7 +33,6 @@ interface ProjectInfo {
 interface DeviceGroup { platform: Platform; devices: DeviceInfo[] }
 
 const MAX_LOGS = 200;
-const SPLASH_MS = 1800;
 const SCREENS: ReadonlyArray<{ id: ScreenId; label: string; key: string }> = [
   { id: 'devices', label: 'DEVICES', key: '1' },
   { id: 'logs', label: 'LOGS', key: '2' },
@@ -41,20 +40,22 @@ const SCREENS: ReadonlyArray<{ id: ScreenId; label: string; key: string }> = [
   { id: 'environment', label: 'ENVIRONMENT', key: '4' },
 ];
 
-/** Restrained OpenCode-inspired dark palette. */
+/** Flat, neutral near-black palette: every surface is a shade of grey, not blue. */
 const C = {
   accent: '#22d3ee',
   good: '#34d399',
   warn: '#fbbf24',
   bad: '#f87171',
-  muted: '#64748b',
-  text: '#e2e8f0',
-  root: '#0b1120',
-  panel: '#131c2e',
-  selected: '#16283a',
-  border: '#1e293b',
+  muted: '#71717a',
+  text: '#e4e4e7',
+  root: '#09090b',
+  surface: '#111113',
+  content: '#0d0d0f',
+  selected: '#1c1c20',
+  warnBg: '#1a1508',
 } as const;
 
+/** Static wordmark: lives in the header permanently, never animates. */
 const LOGO = [
   ' █▀▀█ █▀▄█ █▀▀▀ █████ █    ',
   ' █▄▀█ █ ▀█ █▄▄▄   █   █▄▄▄▄',
@@ -86,16 +87,14 @@ function t(content: string, opts: { fg?: string; bold?: boolean; dim?: boolean; 
   });
 }
 
-function panel(title: string, meta: string | undefined, tone: Tone, children: ReactNode): ReactNode {
+function panel(title: string, meta: string | undefined, children: ReactNode): ReactNode {
   return createElement(
     'box',
     {
       flexDirection: 'column',
-      border: true,
-      borderStyle: 'rounded',
-      borderColor: C.border,
-      backgroundColor: C.panel,
-      paddingX: 1,
+      backgroundColor: C.content,
+      paddingX: 2,
+      paddingY: 1,
       gap: 1,
       flexGrow: 1,
       flexBasis: 0,
@@ -105,7 +104,7 @@ function panel(title: string, meta: string | undefined, tone: Tone, children: Re
     createElement(
       'box',
       { flexDirection: 'row', justifyContent: 'space-between', flexShrink: 0, minHeight: 0 },
-      t(title, { fg: C[tone], bold: true }),
+      t(title, { bold: true }),
       meta ? t(meta, { fg: C.muted, dim: true }) : null,
     ),
     children,
@@ -173,6 +172,7 @@ function wiredAction(label: string, tone: Tone, onPress: () => void, grow = fals
       paddingX: 1,
       flexShrink: 0,
       flexGrow: grow ? 1 : undefined,
+      backgroundColor: C.selected,
       onMouseUp: onPress,
     },
     t('›', { fg: C[tone] }),
@@ -190,8 +190,8 @@ function DeviceActions({ device, onReload, onMenu, onStart, onStop }: {
   if (!device) {
     return createElement(
       'box',
-      { width: 34, flexShrink: 0, border: true, borderStyle: 'rounded', borderColor: C.border, backgroundColor: C.panel, paddingX: 1, paddingY: 1, overflow: 'hidden' },
-      t('ACTIONS', { fg: C.accent, bold: true }),
+      { width: 34, flexShrink: 0, backgroundColor: C.surface, paddingX: 2, paddingY: 1, overflow: 'hidden' },
+      t('ACTIONS', { bold: true }),
       t('Select a device to see actions.', { fg: C.muted, dim: true }),
     );
   }
@@ -201,17 +201,14 @@ function DeviceActions({ device, onReload, onMenu, onStart, onStop }: {
     {
       width: 34,
       flexShrink: 0,
-      border: true,
-      borderStyle: 'rounded',
-      borderColor: C.border,
-      backgroundColor: C.panel,
-      paddingX: 1,
+      backgroundColor: C.surface,
+      paddingX: 2,
       paddingY: 1,
       flexDirection: 'column',
       gap: 1,
       overflow: 'hidden',
     },
-    t(`ACTIONS · ${cut(device.name, 19)}`, { fg: C.accent, bold: true, truncate: true }),
+    t(`ACTIONS · ${cut(device.name, 19)}`, { bold: true, truncate: true }),
     t(cut(device.id, 30), { fg: C.muted, dim: true, truncate: true }),
     // shortcut: boot/shutdown/install/run have no RPC yet; wire them here when plugin-devices adds them.
     disabledAction(booted ? 'SHUTDOWN' : 'BOOT / START', 'pending RPC'),
@@ -240,13 +237,12 @@ function DevicesScreen({ groups, selectedId, scrollRef, onSelect, actions }: {
   return panel(
     'DEVICES',
     `${total} shown · ${booted} booted`,
-    'accent',
     createElement(
       'box',
       { flexDirection: 'row', flexGrow: 1, flexBasis: 0, minHeight: 0, gap: 1, overflow: 'hidden' },
       createElement(
         'scrollbox',
-        { ref: scrollRef, flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden', scrollY: true },
+        { ref: scrollRef, flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden', scrollY: true, scrollbarOptions: { visible: false, showArrows: false } },
         groups.map((group) => createElement(
           'box',
           { key: group.platform, flexDirection: 'column', flexShrink: 0 },
@@ -268,7 +264,6 @@ function LogsScreen({ entries }: { entries: LogEntry[] }): ReactNode {
   return panel(
     'LIVE LOGS',
     `${entries.length} entries`,
-    'warn',
     createElement(
       'scrollbox',
       {
@@ -280,6 +275,7 @@ function LogsScreen({ entries }: { entries: LogEntry[] }): ReactNode {
         stickyScroll: true,
         stickyStart: 'bottom',
         focused: true,
+        scrollbarOptions: { visible: false, showArrows: false },
       },
       entries.length === 0
         ? t('No log entries yet. Start Metro to see activity here.', { fg: C.muted, dim: true })
@@ -295,19 +291,10 @@ function LogsScreen({ entries }: { entries: LogEntry[] }): ReactNode {
   );
 }
 
-function flatAction(label: string, tone: Tone, onPress: () => void): ReactNode {
+function metroAction(label: string, tone: Tone, onPress: () => void): ReactNode {
   return createElement(
     'box',
-    {
-      key: label,
-      height: 1,
-      paddingX: 1,
-      border: true,
-      borderStyle: 'rounded',
-      borderColor: C.border,
-      flexShrink: 0,
-      onMouseUp: onPress,
-    },
+    { key: label, height: 1, paddingX: 1, flexShrink: 0, backgroundColor: C.selected, onMouseUp: onPress },
     t(label, { fg: C[tone], bold: true }),
   );
 }
@@ -324,10 +311,9 @@ function MetroScreen({ metro, onStart, onStop, onReload, onMenu }: {
   return panel(
     'METRO',
     metro.status,
-    'accent',
     createElement(
       'scrollbox',
-      { flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden', scrollY: true, focused: true },
+      { flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden', scrollY: true, focused: true, scrollbarOptions: { visible: false, showArrows: false } },
       createElement(
         'box',
         { flexDirection: 'column', gap: 1, flexShrink: 0 },
@@ -341,10 +327,10 @@ function MetroScreen({ metro, onStart, onStop, onReload, onMenu }: {
         createElement(
           'box',
           { flexDirection: 'row', gap: 1, flexShrink: 0 },
-          flatAction('START', 'good', onStart),
-          flatAction('STOP', 'bad', onStop),
-          flatAction('RELOAD', 'accent', onReload),
-          flatAction('DEV MENU', 'warn', onMenu),
+          metroAction('START', 'good', onStart),
+          metroAction('STOP', 'bad', onStop),
+          metroAction('RELOAD', 'accent', onReload),
+          metroAction('DEV MENU', 'warn', onMenu),
         ),
         t('Click an action, or use s / x / r / d.', { fg: C.muted, dim: true }),
       ),
@@ -357,10 +343,9 @@ function EnvironmentScreen({ health }: { health: HealthCheck[] | undefined }): R
   return panel(
     'ENVIRONMENT',
     health ? `${ok}/${health.length} ok` : 'checking…',
-    'good',
     createElement(
       'scrollbox',
-      { flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden', scrollY: true, focused: true },
+      { flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden', scrollY: true, focused: true, scrollbarOptions: { visible: false, showArrows: false } },
       health === undefined
         ? t('Checking environment…', { fg: C.muted, dim: true })
         : health.map((check) => createElement(
@@ -390,7 +375,7 @@ function SideMenu({ active, filter, counts, onScreen, onFilter }: {
         height: 1,
         flexDirection: 'row',
         gap: 1,
-        paddingX: 1,
+        paddingLeft: 1,
         flexShrink: 0,
         backgroundColor: isActive ? C.selected : undefined,
         onMouseUp: () => onScreen(screen),
@@ -421,13 +406,12 @@ function SideMenu({ active, filter, counts, onScreen, onFilter }: {
   return createElement(
     'box',
     {
-      width: 24,
+      width: 22,
       flexShrink: 0,
-      border: true,
-      borderStyle: 'rounded',
-      borderColor: C.border,
-      backgroundColor: C.panel,
+      flexGrow: 1,
+      backgroundColor: C.surface,
       paddingX: 1,
+      paddingY: 1,
       flexDirection: 'column',
       overflow: 'hidden',
     },
@@ -440,46 +424,27 @@ function SideMenu({ active, filter, counts, onScreen, onFilter }: {
   );
 }
 
-function Header({ splash, project }: { splash: boolean; project: ProjectInfo | undefined }): ReactNode {
-  if (splash) {
-    return createElement(
-      'box',
-      {
-        flexShrink: 0,
-        height: 4,
-        border: ['bottom'],
-        borderColor: C.border,
-        backgroundColor: C.panel,
-        paddingX: 1,
-        flexDirection: 'column',
-        justifyContent: 'center',
-      },
-      createElement('text', { content: LOGO, fg: C.accent, attributes: BOLD }),
-      t('react native mission control', { fg: C.muted }),
-    );
-  }
+function Header({ project }: { project: ProjectInfo | undefined }): ReactNode {
   return createElement(
     'box',
     {
       flexShrink: 0,
       height: 3,
-      border: ['bottom'],
-      borderColor: C.border,
-      backgroundColor: C.panel,
-      paddingX: 1,
+      backgroundColor: C.surface,
+      paddingX: 2,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
     },
     createElement(
       'box',
-      { flexDirection: 'row', gap: 1 },
-      t('◆ rnctl', { fg: C.accent, bold: true }),
-      t('// react native mission control', { fg: C.muted, dim: true, truncate: true }),
+      { flexDirection: 'column', flexShrink: 0 },
+      createElement('text', { content: LOGO, fg: C.accent, attributes: BOLD }),
+      t('react native mission control', { fg: C.muted }),
     ),
     createElement(
       'box',
-      { flexDirection: 'row', gap: 1, flexShrink: 0 },
+      { flexDirection: 'row', gap: 2, flexShrink: 0 },
       t(project?.name ?? '…', { fg: C.muted, dim: true, truncate: true }),
       t('● daemon', { fg: C.good }),
     ),
@@ -500,7 +465,6 @@ function Dashboard({ client }: { client: RpcClient }) {
   const [health, setHealth] = useState<HealthCheck[] | undefined>(undefined);
   const [project, setProject] = useState<ProjectInfo | undefined>(undefined);
   const [active, setActive] = useState<ScreenId>('devices');
-  const [splash, setSplash] = useState(true);
 
   /** Fire an action and surface failures in the footer instead of crashing. */
   const invoke = (method: string, params: unknown, message: string, onDone?: () => void): void => {
@@ -514,11 +478,6 @@ function Dashboard({ client }: { client: RpcClient }) {
         if (mounted.current) setNotice({ text: `${method}: ${reasonText(reason)}`, tone: 'bad' });
       });
   };
-
-  useEffect(() => {
-    const timer = setTimeout(() => setSplash(false), SPLASH_MS);
-    return () => clearTimeout(timer);
-  }, []);
 
   useEffect(() => {
     let live = true;
@@ -679,26 +638,14 @@ function Dashboard({ client }: { client: RpcClient }) {
       backgroundColor: C.root,
       paddingX: 1,
       paddingTop: 1,
-      paddingBottom: 1,
       gap: 1,
       overflow: 'hidden',
     },
-    createElement(Header, { splash, project }),
+    createElement(Header, { project }),
     project && !project.isReactNative
       ? createElement(
         'box',
-        {
-          flexShrink: 0,
-          height: 3,
-          border: true,
-          borderStyle: 'rounded',
-          borderColor: C.warn,
-          backgroundColor: C.panel,
-          paddingX: 1,
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 1,
-        },
+        { flexShrink: 0, height: 1, backgroundColor: C.warnBg, paddingX: 2, flexDirection: 'row', alignItems: 'center', gap: 1 },
         t('⚠', { fg: C.warn, bold: true }),
         t('Not a React Native / Expo project — rnctl works best in an RN project.', { fg: C.warn, truncate: true }),
       )
@@ -713,18 +660,15 @@ function Dashboard({ client }: { client: RpcClient }) {
         onScreen: setActive,
         onFilter: setFilter,
       }),
-      createElement('box', { flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden' }, screen),
+      createElement('box', { flexGrow: 1, flexBasis: 0, minHeight: 0, backgroundColor: C.content, overflow: 'hidden' }, screen),
     ),
     createElement(
       'box',
       {
         flexShrink: 0,
-        height: 4,
-        border: true,
-        borderStyle: 'rounded',
-        borderColor: C.border,
-        backgroundColor: C.panel,
-        paddingX: 1,
+        height: 2,
+        backgroundColor: C.surface,
+        paddingX: 2,
         flexDirection: 'column',
         justifyContent: 'center',
       },
@@ -753,7 +697,8 @@ export async function renderDashboard(client?: RpcClient): Promise<void> {
 
     let done!: () => void;
     const closed = new Promise<void>((resolve) => { done = resolve; });
-    renderer = await createCliRenderer({ exitOnCtrlC: true, onDestroy: () => done() });
+    // Paint the whole canvas near-black; the root box alone can leave gaps in its layout area.
+    renderer = await createCliRenderer({ exitOnCtrlC: true, backgroundColor: C.root, onDestroy: () => done() });
     root = createRoot(renderer);
     root.render(createElement(Dashboard, { client: rpc }));
     await closed;
