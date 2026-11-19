@@ -146,6 +146,72 @@ export interface ProcessExit {
   signal: string | null;
 }
 
+export interface TweakDevice {
+  id: string;
+  platform: Platform;
+  state?: DeviceState;
+  booted?: boolean;
+  isEmulator: boolean;
+}
+
+export interface TweakResult {
+  id: string;
+  platform: Platform;
+  ok: boolean;
+  message: string;
+  status: 'applied' | 'unavailable' | 'error';
+}
+
+export interface TweakAppliedEvent extends TweakResult {
+  kind: string;
+}
+
+export interface TweakResetEvent {
+  id: string;
+  kind: string;
+}
+
+export type FrameworkId = 'maestro' | 'detox';
+
+export interface FrameworkInfo {
+  id: FrameworkId;
+  available: boolean;
+  version?: string;
+  reason?: string;
+  installHint?: string;
+}
+
+export interface E2eFlow {
+  id: string;
+  path: string;
+  name: string;
+  framework: FrameworkId;
+}
+
+export interface E2eRun {
+  runId: string;
+  framework: FrameworkId;
+  flow: string;
+  device: string;
+  platform: Platform;
+  configuration?: string;
+  state: 'running' | 'passed' | 'failed' | 'error';
+  startedAt: number;
+  finishedAt?: number;
+  exitCode?: number;
+  summary?: string;
+  error?: string;
+  artifactsDir: string;
+  screenshots: string[];
+}
+
+export interface E2eRunStarted {
+  runId: string;
+  framework: FrameworkId;
+  flow: string;
+  device: string;
+}
+
 type EventListener<T> = (payload: T) => void;
 
 interface DaemonMessage {

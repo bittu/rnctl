@@ -3,9 +3,10 @@
  * the active screen's content does. All state lives in Dashboard, so switching
  * screens keeps the device list, selection, log buffer, Metro status and health.
  *
- * Screens: 1-4 or [/] or ←/→ or click · devices: ↑/↓ or click · r reload · d dev
+ * Screens: 1-9 or [/] or ←/→ or click · devices: ↑/↓ or click · r reload · d dev
  * menu · s start · x stop · c clear logs · i environment · b boot · p shutdown ·
- * f install app · a run app · broadcast: r/d/t · q/Ctrl+C quit.
+ * f install app · a run app · broadcast: r/d/t · tweaks: ↑↓ target, letter actions ·
+ * e2e: m/t framework, ↑↓ flow, Enter run, x cancel · q/Ctrl+C quit.
  */
 import {
   createCliRenderer,
@@ -20,11 +21,12 @@ import type { DeviceInfo, LogEntry, ProcessExit } from '@rnctl/sdk';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 type Tone = 'accent' | 'good' | 'warn' | 'bad' | 'muted' | 'text';
-type ScreenId = 'devices' | 'logs' | 'metro' | 'environment' | 'broadcast' | 'storage' | 'perf';
+type ScreenId = 'devices' | 'logs' | 'metro' | 'environment' | 'broadcast' | 'storage' | 'perf' | 'tweaks' | 'e2e';
 type DeviceFilter = 'all' | 'ios' | 'android';
 type Platform = 'ios' | 'android';
 type MetroStatus = 'unknown' | 'running' | 'stopped';
-type PromptKind = 'installApp' | 'runApp' | 'deepLink' | 'storageEdit' | 'perfSourcemap' | 'perfStack' | 'perfApp';
+type PromptKind = 'installApp' | 'runApp' | 'deepLink' | 'storageEdit' | 'perfSourcemap' | 'perfStack' | 'perfApp'
+  | 'tweakLocation' | 'tweakBattery' | 'tweakNetwork' | 'tweakPushBundle' | 'tweakPushPayload' | 'e2eConfig';
 interface Notice { text: string; tone: Tone }
 interface ActionResult { ok: boolean; message: string }
 interface BroadcastItem { id: string; platform: string; ok: boolean; message: string }
@@ -85,6 +87,58 @@ interface NetworkEntry {
   responseHeaders: Record<string, string>;
   errorText?: string;
 }
+interface TweakDevice { id: string; platform: Platform; state?: string; booted?: boolean; isEmulator?: boolean }
+interface TweakResult { id: string; platform: Platform; ok: boolean; message: string; status: 'applied' | 'unavailable' | 'error' }
+interface TweakHistoryItem { label: string; result: TweakResult }
+type TweakAction = 'location' | 'dark' | 'light' | 'statusBar' | 'network' | 'battery' | 'push' | 'reset';
+interface E2eFramework { id: 'maestro' | 'detox'; available: boolean; version?: string; reason?: string; installHint?: string }
+interface E2eFlow { id: string; path: string; name: string; framework: 'maestro' | 'detox' }
+interface E2eRun {
+  runId: string;
+  framework: 'maestro' | 'detox';
+  flow: string;
+  device: string;
+  platform: Platform;
+  configuration?: string;
+  state: 'running' | 'passed' | 'failed' | 'error';
+  startedAt: number;
+  finishedAt?: number;
+  exitCode?: number;
+  summary?: string;
+  error?: string;
+  artifactsDir: string;
+  screenshots: string[];
+}
+
+const TWEAK_ACTIONS: ReadonlyArray<{ id: TweakAction; label: string; key: string }> = [
+  { id: 'location', label: 'Location lat,lon', key: 'g' },
+  { id: 'dark', label: 'Dark mode', key: 'd' },
+  { id: 'light', label: 'Light mode', key: 'l' },
+  { id: 'statusBar', label: 'Clean status bar', key: 's' },
+  { id: 'network', label: 'Network profile', key: 'n' },
+  { id: 'battery', label: 'Battery level', key: 'b' },
+  { id: 'push', label: 'Mock push', key: 'p' },
+  { id: 'reset', label: 'Reset all', key: 'z' },
+];
+const NETWORK_PROFILES = ['gsm', 'edge', 'umts', 'hsdpa', 'lte', 'full'] as const;
+
+/** Mirrors the plugin's availability rules so unavailable rows can be marked up front. */
+function tweakUnavailable(action: TweakAction, device: TweakDevice | undefined): string | null {
+  if (!device) return 'Select a target first';
+  const android = device.platform === 'android';
+  const physical = device.isEmulator === false;
+  if (action === 'location') return android && physical ? 'GPS injection is emulator-only' : null;
+  if (action === 'statusBar') return android ? 'Status bar overrides are iOS-only' : null;
+  if (action === 'network') return !android || physical ? 'Network throttle is emulator-only' : null;
+  if (action === 'battery') return !android ? 'Battery override is Android-only' : null;
+  if (action === 'push') return android ? 'Mock push is iOS-only in this plugin' : null;
+  return null;
+}
+
+/** Collapse multi-line command output before truncating so rows stay one line. */
+function oneLine(value: string | undefined, max: number): string {
+  return cut((value ?? '').replace(/\s+/g, ' ').trim(), max);
+}
 
 const MAX_LOGS = 200;
 const NETWORK_SESSION_ID = 'network';
@@ -96,6 +150,8 @@ const SCREENS: ReadonlyArray<{ id: ScreenId; label: string; key: string }> = [
   { id: 'broadcast', label: 'Broadcast', key: '5' },
   { id: 'storage', label: 'Storage', key: '6' },
   { id: 'perf', label: 'Perf', key: '7' },
+  { id: 'tweaks', label: 'Tweaks', key: '8' },
+  { id: 'e2e', label: 'E2E', key: '9' },
 ];
 
 /** Flat, neutral near-black palette: every surface is a shade of grey, not blue. */
@@ -755,6 +811,257 @@ function PerfScreen({ crashes, selectedCrashId, symbolicated, fpsApp, fpsStarted
   );
 }
 
+function TweaksScreen({ devices, selectedId, history, event, listWidth, actionWidth, onSelect, onAction }: {
+  devices: TweakDevice[];
+  selectedId: string | null;
+  history: TweakHistoryItem[];
+  event: string | null;
+  listWidth: number;
+  actionWidth: number;
+  onSelect: (id: string) => void;
+  onAction: (action: TweakAction) => void;
+}): ReactNode {
+  const selected = devices.find((device) => device.id === selectedId);
+  const deviceRow = (device: TweakDevice): ReactNode => {
+    const active = device.id === selectedId;
+    return createElement(
+      'box',
+      {
+        key: device.id,
+        height: 1,
+        flexDirection: 'row',
+        gap: 1,
+        paddingX: 1,
+        flexShrink: 0,
+        backgroundColor: active ? C.selected : undefined,
+        onMouseUp: () => onSelect(device.id),
+      },
+      t(active ? '▸' : ' ', { fg: active ? C.accent : C.muted, shrink: true }),
+      t(cut(device.id, Math.max(6, listWidth - 12)), { fg: active ? C.text : C.muted, bold: active, shrink: true, truncate: true }),
+      t(device.platform === 'ios' ? 'iOS' : 'AND', { fg: active ? C.accent : C.muted, shrink: true }),
+      t(device.isEmulator === false ? 'dev' : 'emu', { fg: C.muted, dim: true, shrink: true }),
+    );
+  };
+  const actionRow = (action: { id: TweakAction; label: string; key: string }): ReactNode => {
+    const reason = tweakUnavailable(action.id, selected);
+    return createElement(
+      'box',
+      {
+        key: action.id,
+        height: 1,
+        flexDirection: 'row',
+        gap: 1,
+        paddingX: 1,
+        flexShrink: 0,
+        onMouseUp: () => onAction(action.id),
+      },
+      t(reason ? '⊘' : '›', { fg: reason ? C.muted : C.accent, shrink: true }),
+      t(`${action.key} ${action.label}`, { fg: reason ? C.muted : C.text, truncate: true }),
+    );
+  };
+  const last = history[history.length - 1];
+  const firstReason = TWEAK_ACTIONS.map((action) => tweakUnavailable(action.id, selected)).find((reason) => reason !== null);
+  const detail = last
+    ? `${last.label}: ${oneLine(last.result.message, actionWidth + listWidth - 4)}`
+    : firstReason
+      ? `⊘ ${firstReason}`
+      : 'Keys g/d/l/s/n/b/p/z · Enter repeats last action';
+  const detailTone: Tone = last
+    ? last.result.status === 'applied' ? 'good' : last.result.status === 'unavailable' ? 'warn' : 'bad'
+    : firstReason ? 'warn' : 'muted';
+  return panel(
+    'Tweaks',
+    `${devices.length} targets${event ? ` · ${oneLine(event, 20)}` : ''}`,
+    createElement(
+      'box',
+      { flexDirection: 'column', flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden' },
+      createElement(
+        'box',
+        { flexDirection: 'row', flexGrow: 1, flexBasis: 0, minHeight: 0, gap: 1, overflow: 'hidden' },
+        createElement(
+          'box',
+          { width: listWidth, flexShrink: 0, flexDirection: 'column', minHeight: 0, overflow: 'hidden' },
+          t('Booted targets', { fg: C.muted, bold: true }),
+          createElement(
+            'scrollbox',
+            { flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden', scrollY: true, scrollbarOptions: { visible: false, showArrows: false } },
+            devices.length === 0
+              ? t('No booted simulators or emulators found.', { fg: C.muted, dim: true, truncate: true })
+              : devices.map(deviceRow),
+          ),
+        ),
+        createElement(
+          'box',
+          { width: actionWidth, flexShrink: 0, flexDirection: 'column', minHeight: 0, overflow: 'hidden' },
+          t('Actions', { bold: true }),
+          t(selected ? cut(selected.id, actionWidth - 2) : 'No target selected', { fg: C.muted, dim: true, truncate: true }),
+          createElement(
+            'scrollbox',
+            { flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden', scrollY: true, scrollbarOptions: { visible: false, showArrows: false } },
+            TWEAK_ACTIONS.map(actionRow),
+          ),
+        ),
+      ),
+      t(detail, { fg: C[detailTone], truncate: true }),
+      t(history.length > 1
+        ? history.slice(-4, -1).map((item) => `${item.label}: ${oneLine(item.result.message, 24)}`).join('  ·  ')
+        : 'Results appear here · unavailable actions show their reason', { fg: C.muted, dim: true, truncate: true }),
+    ),
+  );
+}
+
+function E2eScreen({ frameworks, framework, flows, searchedDirs, devices, flowId, deviceId, platform, configuration, runs, selectedRunId, compact, onFramework, onFlow, onDevice, onPlatform, onConfigure, onRun, onSelectRun, onCancel }: {
+  frameworks: E2eFramework[] | undefined;
+  framework: 'maestro' | 'detox';
+  flows: E2eFlow[] | undefined;
+  searchedDirs: string[];
+  devices: DeviceInfo[];
+  flowId: string | null;
+  deviceId: string | null;
+  platform: Platform;
+  configuration: string;
+  runs: E2eRun[];
+  selectedRunId: string | null;
+  compact: boolean;
+  onFramework: (framework: 'maestro' | 'detox') => void;
+  onFlow: (id: string) => void;
+  onDevice: (id: string) => void;
+  onPlatform: (platform: Platform) => void;
+  onConfigure: () => void;
+  onRun: () => void;
+  onSelectRun: (runId: string) => void;
+  onCancel: (runId: string) => void;
+}): ReactNode {
+  const width = compact ? 30 : 70;
+  const booted = devices.filter((device) => device.state === 'booted');
+  const visibleDevices = booted.filter((device) => device.platform === platform);
+  const info = frameworks?.find((candidate) => candidate.id === framework);
+  const maestro = frameworks?.find((candidate) => candidate.id === 'maestro');
+  const detox = frameworks?.find((candidate) => candidate.id === 'detox');
+  const flow = flows?.find((candidate) => candidate.id === flowId) ?? flows?.[0];
+  const device = visibleDevices.find((candidate) => candidate.id === deviceId) ?? visibleDevices[0];
+  const nextDevice = visibleDevices.length > 0
+    ? visibleDevices[(visibleDevices.findIndex((candidate) => candidate.id === device?.id) + 1) % visibleDevices.length]
+    : undefined;
+  const selectedRun = runs.find((candidate) => candidate.runId === selectedRunId);
+  const chip = (key: string, label: string, active: boolean, tone: Tone, onPress: () => void): ReactNode => createElement(
+    'box',
+    {
+      key,
+      height: 1,
+      flexDirection: 'row',
+      gap: 1,
+      paddingX: 1,
+      flexShrink: 0,
+      backgroundColor: active ? C.selected : undefined,
+      onMouseUp: onPress,
+    },
+    t(label, { fg: active ? C.text : C[tone], bold: active, truncate: true }),
+  );
+  const flowRow = (entry: E2eFlow): ReactNode => createElement(
+    'box',
+    {
+      key: entry.id,
+      height: 1,
+      flexDirection: 'row',
+      gap: 1,
+      paddingX: 1,
+      flexShrink: 0,
+      backgroundColor: entry.id === flow?.id ? C.selected : undefined,
+      onMouseUp: () => onFlow(entry.id),
+    },
+    t(entry.id === flow?.id ? '▸' : ' ', { fg: entry.id === flow?.id ? C.accent : C.muted, shrink: true }),
+    t(cut(entry.name, width), { fg: entry.id === flow?.id ? C.text : C.muted, shrink: true, truncate: true }),
+    t(cut(entry.id, Math.max(8, width - 24)), { fg: C.muted, dim: true, shrink: true, truncate: true }),
+  );
+  const runTone = (state: E2eRun['state']): Tone =>
+    state === 'passed' ? 'good' : state === 'running' ? 'accent' : 'bad';
+  const runGlyph = (state: E2eRun['state']): string =>
+    state === 'passed' ? '✓' : state === 'running' ? '◐' : state === 'failed' ? '✗' : '!';
+  const runRow = (run: E2eRun): ReactNode => createElement(
+    'box',
+    {
+      key: run.runId,
+      flexDirection: 'column',
+      flexShrink: 0,
+      paddingX: 1,
+      backgroundColor: run.runId === selectedRunId ? C.selected : undefined,
+      onMouseUp: () => onSelectRun(run.runId),
+    },
+    createElement(
+      'box',
+      { flexDirection: 'row', gap: 1, flexShrink: 0 },
+      t(runGlyph(run.state), { fg: C[runTone(run.state)], shrink: true }),
+      t(`#${run.runId}`, { fg: C[runTone(run.state)], bold: true, shrink: true }),
+      t(run.framework, { fg: C.muted, shrink: true }),
+      t(oneLine(run.flow, width), { fg: C.text, shrink: true, truncate: true }),
+      run.state === 'running' ? chip(`cancel-${run.runId}`, '× cancel', false, 'bad', () => onCancel(run.runId)) : null,
+    ),
+    run.error
+      ? t(`  ${oneLine(run.error, width + 20)}`, { fg: C.bad, truncate: true })
+      : run.summary
+        ? t(`  ${oneLine(run.summary, width + 20)}`, { fg: C.muted, dim: true, truncate: true })
+        : null,
+    run.finishedAt !== undefined
+      ? t(`  ${clock(run.startedAt)}–${clock(run.finishedAt)} · exit ${run.exitCode ?? '—'}${run.screenshots.length > 0 ? ` · ${run.screenshots.length} shot(s)` : ''}`, { fg: C.muted, dim: true, truncate: true })
+      : null,
+    run.screenshots.length > 0
+      ? t(`  shots: ${run.screenshots.slice(0, 2).map((shot) => cut(shot, compact ? 24 : 50)).join(', ')}${run.screenshots.length > 2 ? ` +${run.screenshots.length - 2}` : ''}`, { fg: C.accent, truncate: true })
+      : null,
+  );
+  return panel(
+    'E2E',
+    `${runs.length} runs${selectedRun ? ` · #${selectedRun.runId} ${selectedRun.state}` : ''}`,
+    createElement(
+      'box',
+      { flexDirection: 'column', flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden' },
+      createElement(
+        'box',
+        { flexDirection: 'row', gap: 1, flexShrink: 0 },
+        chip('maestro', `${framework === 'maestro' ? '▸ ' : ''}m Maestro${maestro?.available && maestro.version ? ` ${oneLine(maestro.version, 10)}` : ''}`, framework === 'maestro', maestro?.available === false ? 'muted' : 'accent', () => onFramework('maestro')),
+        chip('detox', `${framework === 'detox' ? '▸ ' : ''}t Detox${detox?.available && detox.version ? ` ${oneLine(detox.version, 10)}` : ''}`, framework === 'detox', detox?.available === false ? 'muted' : 'accent', () => onFramework('detox')),
+      ),
+      frameworks === undefined
+        ? t('Checking frameworks…', { fg: C.muted, dim: true })
+        : !info?.available
+          ? createElement(
+            'box',
+            { flexDirection: 'column', flexShrink: 0 },
+            t(`  ⊘ ${oneLine(info?.reason ?? 'Framework unavailable', width + 20)}`, { fg: C.warn }),
+            t(`  ${oneLine(info?.installHint ?? '', width + 20)}`, { fg: C.muted, dim: true, truncate: true }),
+          )
+          : null,
+      createElement(
+        'scrollbox',
+        { flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden', scrollY: true, scrollbarOptions: { visible: false, showArrows: false } },
+        t(`Flows · searched ${oneLine(searchedDirs.join(', ') || '—', width + 4)}`, { fg: C.muted, bold: true, truncate: true }),
+        flows === undefined
+          ? t('  Discovering flows…', { fg: C.muted, dim: true })
+          : flows.length === 0
+            ? t(`  No ${framework} flows found — add a file under ${searchedDirs[0] ?? 'e2e/'}.`, { fg: C.muted, dim: true, truncate: true })
+            : flows.map(flowRow),
+        t('Run', { fg: C.muted, bold: true }),
+        t(`  flow: ${oneLine(flow?.name ?? '—', width + 20)}`, { fg: C.text, truncate: true }),
+        t(`  device: ${device ? cut(device.name, width) : '—'} · platform: ${platform}`, { fg: C.text, truncate: true }),
+        t(`  config: ${framework === 'detox' ? cut(configuration, width) : 'n/a (Maestro)'}`, { fg: C.muted, truncate: true }),
+        createElement(
+          'box',
+          { flexDirection: 'row', gap: 1, flexShrink: 0 },
+          chip('ios', 'iOS', platform === 'ios', 'accent', () => onPlatform('ios')),
+          chip('android', 'Android', platform === 'android', 'accent', () => onPlatform('android')),
+          nextDevice ? chip('device', `d ${cut(nextDevice.name, 12)}`, false, 'muted', () => onDevice(nextDevice.id)) : null,
+          framework === 'detox' ? chip('config', 'c config', false, 'muted', onConfigure) : null,
+          chip('run', info?.available === false ? '⊘ unavailable' : '↵ run', false, info?.available === false ? 'muted' : 'good', onRun),
+        ),
+        t('Runs', { fg: C.muted, bold: true }),
+        runs.length === 0
+          ? t('  No runs yet. Select a flow and press Enter.', { fg: C.muted, dim: true, truncate: true })
+          : [...runs].sort((a, b) => b.startedAt - a.startedAt).map(runRow),
+      ),
+    ),
+  );
+}
+
 function EnvironmentScreen({ health }: { health: HealthCheck[] | undefined }): ReactNode {
   const ok = health?.filter((check) => check.ok).length ?? 0;
   return panel(
@@ -838,6 +1145,8 @@ function SideMenu({ active, filter, counts, onScreen, onFilter }: {
     entry('broadcast', 'Broadcast', '5'),
     entry('storage', 'Storage', '6'),
     entry('perf', 'Perf', '7'),
+    entry('tweaks', 'Tweaks', '8'),
+    entry('e2e', 'E2E', '9'),
   );
 }
 
@@ -910,7 +1219,172 @@ function Dashboard({ client }: { client: RpcClient }) {
   const [fpsApp, setFpsApp] = useState<string | null>(null);
   const [fpsStarted, setFpsStarted] = useState(false);
   const [fpsSamples, setFpsSamples] = useState<FpsSample[]>([]);
+  const [tweakDevices, setTweakDevices] = useState<TweakDevice[] | undefined>(undefined);
+  const [tweakSelectedId, setTweakSelectedId] = useState<string | null>(null);
+  const [tweakHistory, setTweakHistory] = useState<TweakHistoryItem[]>([]);
+  const [tweakEvent, setTweakEvent] = useState<string | null>(null);
+  const [lastTweakAction, setLastTweakAction] = useState<TweakAction | null>(null);
+  const [e2eFrameworks, setE2eFrameworks] = useState<E2eFramework[] | undefined>(undefined);
+  const [e2eFramework, setE2eFramework] = useState<'maestro' | 'detox'>('maestro');
+  const [e2eFlows, setE2eFlows] = useState<E2eFlow[] | undefined>(undefined);
+  const [e2eSearchedDirs, setE2eSearchedDirs] = useState<string[]>([]);
+  const [e2eFlowId, setE2eFlowId] = useState<string | null>(null);
+  const [e2eDeviceId, setE2eDeviceId] = useState<string | null>(null);
+  const [e2ePlatform, setE2ePlatform] = useState<Platform>('ios');
+  const [e2eConfiguration, setE2eConfiguration] = useState('ios.sim.debug');
+  const [e2eRuns, setE2eRuns] = useState<E2eRun[]>([]);
+  const [e2eSelectedRunId, setE2eSelectedRunId] = useState<string | null>(null);
+  const [pushBundleId, setPushBundleId] = useState('');
   const columns = renderer.width || 80;
+  const tweakSelected = tweakDevices?.find((device) => device.id === tweakSelectedId);
+  const bootedDevices = devices.filter((device) => device.state === 'booted');
+
+  const refreshTweakDevices = (): void => {
+    void client.call<{ devices: TweakDevice[] }>('tweaks.devices', {})
+      .then((result) => { if (mounted.current) setTweakDevices(result.devices); })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `tweaks.devices: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const pushTweakResult = (label: string, result: TweakResult): void => {
+    setTweakHistory((current) => [...current.slice(-3), { label, result }]);
+  };
+
+  const invokeTweak = (method: string, params: unknown, label: string, target: TweakDevice): void => {
+    void client.call<TweakResult | { results: TweakResult[]; ok: boolean }>(method, params)
+      .then((result) => {
+        if (!mounted.current) return;
+        if ('results' in result) {
+          const passed = result.results.filter((item) => item.ok).length;
+          const failed = result.results.find((item) => !item.ok);
+          const message = `${passed}/${result.results.length} reset${failed ? ` · ${failed.message}` : ''}`;
+          pushTweakResult(label, { id: target.id, platform: target.platform, ok: result.ok, message, status: result.ok ? 'applied' : 'error' });
+          setNotice({ text: `${label}: ${message}`, tone: result.ok ? 'good' : 'bad' });
+        } else {
+          const normalized: TweakResult = {
+            ...result,
+            message: result.message || (result.ok ? 'done' : 'failed'),
+            status: result.status ?? (result.ok ? 'applied' : 'error'),
+          };
+          pushTweakResult(label, normalized);
+          const tone: Tone = normalized.status === 'applied' ? 'good' : normalized.status === 'unavailable' ? 'warn' : 'bad';
+          setNotice({ text: `${label}: ${normalized.message}`, tone });
+        }
+        refreshTweakDevices();
+      })
+      .catch((reason: unknown) => {
+        if (!mounted.current) return;
+        pushTweakResult(label, { id: target.id, platform: target.platform, ok: false, message: reasonText(reason), status: 'error' });
+        setNotice({ text: `${method}: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const runTweakAction = (action: TweakAction): void => {
+    setLastTweakAction(action);
+    const target = tweakSelected;
+    if (!target) { setNotice({ text: 'Select a target first', tone: 'warn' }); return; }
+    const label = TWEAK_ACTIONS.find((item) => item.id === action)?.label ?? action;
+    const reason = tweakUnavailable(action, target);
+    if (reason) {
+      pushTweakResult(label, { id: target.id, platform: target.platform, ok: false, message: reason, status: 'unavailable' });
+      setNotice({ text: `${label}: ${reason}`, tone: 'warn' });
+      return;
+    }
+    const params = { id: target.id, platform: target.platform };
+    switch (action) {
+      case 'location': startPrompt('tweakLocation'); return;
+      case 'battery': startPrompt('tweakBattery'); return;
+      case 'network': startPrompt('tweakNetwork'); return;
+      case 'push': startPrompt('tweakPushBundle'); return;
+      case 'dark': invokeTweak('tweaks.appearance.set', { ...params, mode: 'dark' }, label, target); return;
+      case 'light': invokeTweak('tweaks.appearance.set', { ...params, mode: 'light' }, label, target); return;
+      case 'statusBar': invokeTweak('tweaks.statusBar.set', { ...params, preset: 'clean' }, label, target); return;
+      case 'reset': invokeTweak('tweaks.reset', { ...params, what: 'all' }, label, target); return;
+    }
+  };
+
+  const refreshE2eFrameworks = (): void => {
+    void client.call<{ frameworks: E2eFramework[] }>('e2e.frameworks', { cwd: process.cwd() })
+      .then((result) => { if (mounted.current) setE2eFrameworks(result.frameworks); })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `e2e.frameworks: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const refreshE2eFlows = (framework: 'maestro' | 'detox'): void => {
+    void client.call<{ flows: E2eFlow[]; searchedDirs: string[] }>('e2e.flows', { framework, cwd: process.cwd() })
+      .then((result) => {
+        if (!mounted.current) return;
+        setE2eFlows(result.flows);
+        setE2eSearchedDirs(result.searchedDirs);
+      })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `e2e.flows: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const refreshE2eStatus = (): void => {
+    void client.call<{ runs: E2eRun[] }>('e2e.status', {})
+      .then((result) => { if (mounted.current) setE2eRuns(result.runs); })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `e2e.status: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const chooseE2ePlatform = (platform: Platform): void => {
+    setE2ePlatform(platform);
+    setE2eConfiguration((current) => current === 'ios.sim.debug' || current === 'android.emu.debug'
+      ? (platform === 'ios' ? 'ios.sim.debug' : 'android.emu.debug')
+      : current);
+  };
+
+  const upsertE2eRun = (run: E2eRun): void => {
+    setE2eRuns((current) => {
+      const index = current.findIndex((item) => item.runId === run.runId);
+      return index < 0 ? [run, ...current] : current.map((item, i) => (i === index ? run : item));
+    });
+  };
+
+  const startE2eRun = (): void => {
+    const flow = e2eFlows?.find((item) => item.id === e2eFlowId) ?? e2eFlows?.[0];
+    const device = bootedDevices.find((item) => item.id === e2eDeviceId && item.platform === e2ePlatform)
+      ?? bootedDevices.find((item) => item.platform === e2ePlatform);
+    if (!flow) { setNotice({ text: `No ${e2eFramework} flow selected`, tone: 'warn' }); return; }
+    if (!device) { setNotice({ text: `No booted ${e2ePlatform} device`, tone: 'warn' }); return; }
+    const info = e2eFrameworks?.find((item) => item.id === e2eFramework);
+    if (info && !info.available) {
+      setNotice({ text: `${e2eFramework}: ${info.reason ?? 'unavailable'} ${info.installHint ?? ''}`.trim(), tone: 'warn' });
+      return;
+    }
+    const params: Record<string, string> = { framework: e2eFramework, flow: flow.id, device: device.id, platform: device.platform };
+    if (e2eFramework === 'detox') params.configuration = e2eConfiguration;
+    void client.call<{ runId: string; started: boolean; processId?: string; reason?: string }>('e2e.run', params)
+      .then((result) => {
+        if (!mounted.current) return;
+        setNotice({
+          text: result.started ? `Started #${result.runId} · ${flow.name} on ${device.name}` : (result.reason ?? 'Run did not start'),
+          tone: result.started ? 'good' : 'bad',
+        });
+        if (result.started) setE2eSelectedRunId(result.runId);
+        refreshE2eStatus();
+      })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `e2e.run: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const cancelE2eRun = (runId: string): void => {
+    void client.call<{ cancelled: boolean }>('e2e.cancel', { runId })
+      .then((result) => {
+        if (!mounted.current) return;
+        setNotice({ text: result.cancelled ? `Cancelled #${runId}` : `Could not cancel #${runId}`, tone: result.cancelled ? 'warn' : 'bad' });
+        refreshE2eStatus();
+      })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `e2e.cancel: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
 
   const refreshSources = (): void => {
     void client.call<{ sources: LogSource[] }>('logs.sources')
@@ -1364,6 +1838,25 @@ function Dashboard({ client }: { client: RpcClient }) {
       }),
       client.on('metro:ready', () => { if (live) setMetro({ status: 'running' }); }),
       client.on('metro:stopped', () => { if (live) setMetro({ status: 'stopped' }); }),
+      client.on<TweakResult & { kind?: string }>('tweak:applied', (event) => {
+        if (live) setTweakEvent(`${event.kind ?? 'tweak'} → ${event.id}`);
+      }),
+      client.on<{ id: string; kind: string }>('tweak:reset', (event) => {
+        if (live) setTweakEvent(`reset ${event.kind}`);
+      }),
+      client.on<{ runId: string; framework: 'maestro' | 'detox'; flow: string; device: string }>('e2e:run-started', (event) => {
+        if (!live) return;
+        setE2eSelectedRunId(event.runId);
+        refreshE2eStatus();
+      }),
+      client.on<E2eRun>('e2e:run-finished', (event) => {
+        if (!live) return;
+        upsertE2eRun(event);
+        setNotice({
+          text: `#${event.runId} ${event.state}${event.summary ? ` · ${oneLine(event.summary, 70)}` : ''}`,
+          tone: event.state === 'passed' ? 'good' : 'bad',
+        });
+      }),
     ];
     return () => {
       live = false;
@@ -1394,6 +1887,24 @@ function Dashboard({ client }: { client: RpcClient }) {
   }, [perfCrashes, selectedCrashId]);
 
   useEffect(() => {
+    if (!tweakDevices) return;
+    if (tweakDevices.length === 0) { if (tweakSelectedId !== null) setTweakSelectedId(null); return; }
+    if (!tweakDevices.some((device) => device.id === tweakSelectedId)) setTweakSelectedId(tweakDevices[0]!.id);
+  }, [tweakDevices, tweakSelectedId]);
+
+  useEffect(() => {
+    if (!e2eFlows) return;
+    if (e2eFlows.length === 0) { if (e2eFlowId !== null) setE2eFlowId(null); return; }
+    if (!e2eFlows.some((flow) => flow.id === e2eFlowId)) setE2eFlowId(e2eFlows[0]!.id);
+  }, [e2eFlows, e2eFlowId]);
+
+  useEffect(() => {
+    const suitable = bootedDevices.find((device) => device.platform === e2ePlatform);
+    if (!suitable) return;
+    if (!bootedDevices.some((device) => device.id === e2eDeviceId && device.platform === e2ePlatform)) setE2eDeviceId(suitable.id);
+  }, [bootedDevices, e2eDeviceId, e2ePlatform]);
+
+  useEffect(() => {
     if (active === 'devices' && selectedDevice) {
       devicesScroll.current?.scrollChildIntoView(`dev-${selectedDevice.id}`, { align: 'nearest' });
     }
@@ -1421,7 +1932,9 @@ function Dashboard({ client }: { client: RpcClient }) {
     if (active === 'logs') { refreshSources(); refreshNetworkStatus(); }
     if (active === 'storage') refreshStorageApps();
     if (active === 'perf') { refreshCrashes(); loadFpsSamples(); }
-  }, [active, client]);
+    if (active === 'tweaks') refreshTweakDevices();
+    if (active === 'e2e') { refreshE2eFrameworks(); refreshE2eFlows(e2eFramework); refreshE2eStatus(); }
+  }, [active, client, e2eFramework]);
 
   const tabIds: Array<string | null> = [null, ...sessions.map((session) => session.sessionId)];
   const cycleTabs = (step: number): void => {
@@ -1439,8 +1952,10 @@ function Dashboard({ client }: { client: RpcClient }) {
   };
 
   const startPrompt = (kind: PromptKind): void => {
-    const deviceFree = kind === 'deepLink' || kind.startsWith('perf');
-    if (!deviceFree && !selectedDevice) { setNotice({ text: 'Select a device first', tone: 'warn' }); return; }
+    const deviceFree = kind === 'deepLink' || kind === 'e2eConfig' || kind.startsWith('perf');
+    const tweakPrompt = kind.startsWith('tweak');
+    if (tweakPrompt && !tweakSelected) { setNotice({ text: 'Select a tweak target first', tone: 'warn' }); return; }
+    if (!deviceFree && !tweakPrompt && !selectedDevice) { setNotice({ text: 'Select a device first', tone: 'warn' }); return; }
     setPrompt(kind);
     setPromptValue('');
   };
@@ -1480,6 +1995,59 @@ function Dashboard({ client }: { client: RpcClient }) {
     if (prompt === 'perfApp') {
       setPrompt(null);
       startFps(value);
+      return;
+    }
+    if (prompt === 'e2eConfig') {
+      setE2eConfiguration(value);
+      setPrompt(null);
+      setNotice({ text: `Detox configuration: ${value}`, tone: 'accent' });
+      return;
+    }
+    if (prompt.startsWith('tweak')) {
+      const target = tweakSelected;
+      if (!target) { setPrompt(null); return; }
+      const action: TweakAction = prompt === 'tweakLocation' ? 'location' : prompt === 'tweakBattery' ? 'battery'
+        : prompt === 'tweakNetwork' ? 'network' : 'push';
+      const label = TWEAK_ACTIONS.find((item) => item.id === action)?.label ?? action;
+      const base = { id: target.id, platform: target.platform };
+      if (prompt === 'tweakLocation') {
+        const match = /^(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)$/.exec(value);
+        const lat = match ? Number(match[1]) : NaN;
+        const lon = match ? Number(match[2]) : NaN;
+        if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+          setNotice({ text: 'Enter latitude,longitude — e.g. 37.7749,-122.4194', tone: 'warn' });
+          return;
+        }
+        invokeTweak('tweaks.location.set', { ...base, lat, lon }, label, target);
+      } else if (prompt === 'tweakBattery') {
+        const level = Number(value);
+        if (!Number.isInteger(level) || level < 0 || level > 100) {
+          setNotice({ text: 'Battery level must be an integer 0-100', tone: 'warn' });
+          return;
+        }
+        invokeTweak('tweaks.battery.set', { ...base, level }, label, target);
+      } else if (prompt === 'tweakNetwork') {
+        const profile = value.toLowerCase();
+        if (!NETWORK_PROFILES.includes(profile as typeof NETWORK_PROFILES[number])) {
+          setNotice({ text: `Profile must be one of ${NETWORK_PROFILES.join(', ')}`, tone: 'warn' });
+          return;
+        }
+        invokeTweak('tweaks.network.set', { ...base, profile }, label, target);
+      } else if (prompt === 'tweakPushBundle') {
+        setPushBundleId(value);
+        setPrompt('tweakPushPayload');
+        setPromptValue('');
+        return;
+      } else {
+        let payload: unknown;
+        try { payload = JSON.parse(value); } catch { setNotice({ text: 'Payload must be valid JSON', tone: 'warn' }); return; }
+        if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+          setNotice({ text: 'Payload must be a JSON object', tone: 'warn' });
+          return;
+        }
+        invokeTweak('tweaks.push.send', { ...base, bundleId: pushBundleId, payload }, label, target);
+      }
+      setPrompt(null);
       return;
     }
     if (!selectedDevice) { setPrompt(null); return; }
@@ -1535,9 +2103,62 @@ function Dashboard({ client }: { client: RpcClient }) {
       if (sources[index]) attachSource(sources[index]!);
       return;
     }
-    if (/^[1-7]$/.test(name)) {
+    if (/^[1-9]$/.test(name)) {
       key.preventDefault();
       setActive(SCREENS[Number(name) - 1]!.id);
+      return;
+    }
+    if (active === 'tweaks') {
+      if (name === 'up' || name === 'down') {
+        key.preventDefault();
+        const ids = tweakDevices?.map((device) => device.id) ?? [];
+        const index = ids.indexOf(tweakSelectedId ?? '');
+        const next = Math.max(0, Math.min(ids.length - 1, (index < 0 ? 0 : index) + (name === 'up' ? -1 : 1)));
+        if (ids[next]) setTweakSelectedId(ids[next]!);
+        return;
+      }
+      if (name === 'return' || name === 'enter') {
+        key.preventDefault();
+        if (lastTweakAction) runTweakAction(lastTweakAction);
+        return;
+      }
+      const action = TWEAK_ACTIONS.find((item) => item.key === name);
+      if (action) { key.preventDefault(); runTweakAction(action.id); }
+      return;
+    }
+    if (active === 'e2e') {
+      if (name === 'up' || name === 'down') {
+        key.preventDefault();
+        const ids = e2eFlows?.map((flow) => flow.id) ?? [];
+        const index = ids.indexOf(e2eFlowId ?? '');
+        const next = Math.max(0, Math.min(ids.length - 1, (index < 0 ? 0 : index) + (name === 'up' ? -1 : 1)));
+        if (ids[next]) setE2eFlowId(ids[next]!);
+        return;
+      }
+      if (name === 'm' || name === 't') { key.preventDefault(); setE2eFramework(name === 'm' ? 'maestro' : 'detox'); return; }
+      if (name === 'o') { key.preventDefault(); chooseE2ePlatform(e2ePlatform === 'ios' ? 'android' : 'ios'); return; }
+      if (name === 'd') {
+        key.preventDefault();
+        const options = bootedDevices.filter((device) => device.platform === e2ePlatform);
+        const index = options.findIndex((device) => device.id === e2eDeviceId);
+        const next = options[(index + 1) % options.length];
+        if (next) setE2eDeviceId(next.id);
+        return;
+      }
+      if (name === 'c') {
+        key.preventDefault();
+        if (e2eFramework === 'detox') startPrompt('e2eConfig');
+        else setNotice({ text: 'Configuration applies to Detox only', tone: 'muted' });
+        return;
+      }
+      if (name === 'return' || name === 'enter') { key.preventDefault(); startE2eRun(); return; }
+      if (name === 'x') {
+        key.preventDefault();
+        const runId = e2eSelectedRunId ?? [...e2eRuns].reverse().find((run) => run.state === 'running')?.runId;
+        if (runId) cancelE2eRun(runId);
+        else setNotice({ text: 'No run to cancel', tone: 'muted' });
+        return;
+      }
       return;
     }
     if (active === 'perf') {
@@ -1734,6 +2355,49 @@ function Dashboard({ client }: { client: RpcClient }) {
         },
       });
       break;
+    case 'tweaks':
+      screen = createElement(TweaksScreen, {
+        devices: tweakDevices ?? [],
+        selectedId: tweakSelectedId,
+        history: tweakHistory,
+        event: tweakEvent,
+        listWidth: columns >= 120 ? 56 : 22,
+        actionWidth: columns >= 120 ? 60 : 26,
+        onSelect: (id: string) => {
+          setTweakSelectedId(id);
+          setNotice({ text: `Selected ${id}`, tone: 'accent' });
+        },
+        onAction: runTweakAction,
+      });
+      break;
+    case 'e2e':
+      screen = createElement(E2eScreen, {
+        frameworks: e2eFrameworks,
+        framework: e2eFramework,
+        flows: e2eFlows,
+        searchedDirs: e2eSearchedDirs,
+        devices,
+        flowId: e2eFlowId,
+        deviceId: e2eDeviceId,
+        platform: e2ePlatform,
+        configuration: e2eConfiguration,
+        runs: e2eRuns,
+        selectedRunId: e2eSelectedRunId,
+        compact: columns < 120,
+        onFramework: setE2eFramework,
+        onFlow: setE2eFlowId,
+        onDevice: (id: string) => {
+          setE2eDeviceId(id);
+          const device = devices.find((candidate) => candidate.id === id);
+          if (device) setE2ePlatform(device.platform);
+        },
+        onPlatform: chooseE2ePlatform,
+        onConfigure: () => startPrompt('e2eConfig'),
+        onRun: startE2eRun,
+        onSelectRun: setE2eSelectedRunId,
+        onCancel: cancelE2eRun,
+      });
+      break;
     default:
       // Keep the device name + platform + state on one line: 27 cols of chrome, 19 of row overhead.
       const actionWidth = columns >= 120 ? 28 : 20;
@@ -1768,6 +2432,12 @@ function Dashboard({ client }: { client: RpcClient }) {
     ios: devices.filter((device) => device.platform === 'ios').length,
     android: devices.filter((device) => device.platform === 'android').length,
   };
+  const promptLabel = prompt === 'tweakLocation' ? 'Location (lat,lon)'
+    : prompt === 'tweakBattery' ? 'Battery 0-100'
+      : prompt === 'tweakNetwork' ? `Profile (${NETWORK_PROFILES.join('/')})`
+        : prompt === 'tweakPushBundle' ? 'Push bundle id'
+          : prompt === 'tweakPushPayload' ? `Push JSON for ${cut(pushBundleId, 20)}`
+            : 'Detox configuration';
 
   return createElement(
     'box',
@@ -1803,6 +2473,15 @@ function Dashboard({ client }: { client: RpcClient }) {
       createElement('box', { width: 1, flexShrink: 0, backgroundColor: C.separator }),
       createElement('box', { flexGrow: 1, flexBasis: 0, minHeight: 0, backgroundColor: C.content, paddingLeft: 1, overflow: 'hidden' }, screen),
     ),
+    prompt && (prompt.startsWith('tweak') || prompt === 'e2eConfig')
+      ? createElement(
+        'box',
+        { flexShrink: 0, height: 1, backgroundColor: C.selected, paddingX: 2, flexDirection: 'row', gap: 1, overflow: 'hidden' },
+        t(promptLabel, { fg: C.accent, shrink: true }),
+        t(`${cut(promptValue, Math.max(12, columns - 46))}▌`, { fg: C.text, grow: true, truncate: true }),
+        t('↵ ok · esc cancel', { fg: C.muted, dim: true, shrink: true }),
+      )
+      : null,
     createElement(
       'box',
       {
@@ -1814,12 +2493,16 @@ function Dashboard({ client }: { client: RpcClient }) {
         justifyContent: 'center',
       },
       t(`${notice.tone === 'bad' ? '✗' : '›'} ${notice.text}`, { fg: C[notice.tone], truncate: true }),
-      t('1-7/←→ screens · ↑↓ · b/p/f/a device · r/d/t cast · s/x metro · q quit', {
+      t('1-9/←→ screens · ↑↓ · b/p/f/a device · r/d/t cast · s/x metro · q quit', {
         fg: C.muted,
         dim: true,
         truncate: true,
       }),
-      t('Logs: 1-5 source · ↑↓ pick · Enter attach · Tab/[ ] tabs · w close · c clear', {
+      t(active === 'tweaks'
+        ? 'Tweaks: g loc · d/l look · s bar · n net · b batt · p push · z reset'
+        : active === 'e2e'
+          ? 'E2E: m/t fw · ↑↓ flow · d device · o OS · c cfg · ↵ run · x cancel'
+          : 'Logs: 1-5 source · ↑↓ pick · Enter attach · Tab/[ ] tabs · w close · c clear', {
         fg: C.muted,
         dim: true,
         truncate: true,

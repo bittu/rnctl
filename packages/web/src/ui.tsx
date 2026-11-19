@@ -20,6 +20,8 @@ const ICONS: Record<string, ReactNode> = {
   broadcast: <><circle cx="12" cy="12" r="2" /><path d="M7.8 7.8a6 6 0 0 0 0 8.4M16.2 16.2a6 6 0 0 0 0-8.4M4.9 4.9a10 10 0 0 0 0 14.2M19.1 19.1a10 10 0 0 0 0-14.2" /></>,
   storage: <><ellipse cx="12" cy="6" rx="8" ry="3" /><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6" /></>,
   perf: <><path d="M3 17l5-6 4 3 5-8 4 4" /><path d="M3 21h18" /></>,
+  tweaks: <><path d="M4 7h10M18 7h2M4 17h2M10 17h10" /><circle cx="16" cy="7" r="2" /><circle cx="8" cy="17" r="2" /></>,
+  e2e: <><path d="M9 3h6M10 3v6l-5 10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1l-5-10V3" /><path d="M7.5 15h9" /></>,
 };
 
 export function Icon({ name, size = 17 }: { name: string; size?: number }): ReactNode {

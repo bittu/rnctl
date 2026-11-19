@@ -13,8 +13,10 @@ import EnvironmentSection from './sections/Environment';
 import BroadcastSection from './sections/Broadcast';
 import StorageSection from './sections/Storage';
 import PerfSection from './sections/Perf';
+import TweaksSection from './sections/Tweaks';
+import E2ESection from './sections/E2E';
 
-type ScreenId = 'devices' | 'logs' | 'metro' | 'environment' | 'broadcast' | 'storage' | 'perf';
+type ScreenId = 'devices' | 'logs' | 'metro' | 'environment' | 'broadcast' | 'storage' | 'perf' | 'tweaks' | 'e2e';
 export type DeviceFilter = 'all' | 'ios' | 'android';
 type MetroState = { status: 'unknown' | 'running' | 'stopped'; pid?: number };
 
@@ -27,6 +29,8 @@ const SCREENS: ReadonlyArray<{ id: ScreenId; label: string; key: string }> = [
   { id: 'broadcast', label: 'Broadcast', key: '5' },
   { id: 'storage', label: 'Storage', key: '6' },
   { id: 'perf', label: 'Perf', key: '7' },
+  { id: 'tweaks', label: 'Tweaks', key: '8' },
+  { id: 'e2e', label: 'E2E', key: '9' },
 ];
 
 interface DashboardContextValue {
@@ -264,6 +268,8 @@ function Dashboard({ client }: { client: WebRpcClient }): ReactNode {
                 {screen.id === 'broadcast' && <BroadcastSection />}
                 {screen.id === 'storage' && <StorageSection />}
                 {screen.id === 'perf' && <PerfSection />}
+                {screen.id === 'tweaks' && <TweaksSection />}
+                {screen.id === 'e2e' && <E2ESection />}
               </div>
             ))}
           </main>
