@@ -31,6 +31,7 @@
     "@rnctl/plugin-logs": "workspace:*",
     "@rnctl/plugin-metro": "workspace:*",
     "@rnctl/plugin-network": "workspace:*",
+    "@rnctl/plugin-storage": "workspace:*",
     "@rnctl/sdk": "workspace:*",
     "@rnctl/tui": "workspace:*",
     "commander": "^15.1.0"

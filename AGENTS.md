@@ -116,7 +116,7 @@ export default definePlugin({
   3. `[ ]` `@rnctl/plugin-simulator-tweaks`: GPS/network presets, status-bar overrides and mock push notifications.
 * **[~] Phase 3 — Deep Inspection:**
   1. `[x]` `@rnctl/plugin-network`: zero-SDK network capture via Metro's CDP inspector proxy (RN 0.83+), with a Network tab in the TUI.
-  2. `[ ]` `@rnctl/plugin-storage`: AsyncStorage/MMKV/SQLite viewer.
+  2. `[~]` `@rnctl/plugin-storage`: read-only AsyncStorage/SQLite viewer with a TUI explorer; MMKV and write-back are not supported yet.
   3. `[ ]` `@rnctl/plugin-perf`: Hermes crash symbolication and FPS profiling.
 * **[ ] Phase 4 — AI & Ecosystem:** Built-in MCP server (`@rnctl/plugin-mcp`) exposing live logs and device actions to AI coding agents, plus `rnctl plugin create <name>`.
 

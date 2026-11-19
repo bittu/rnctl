@@ -20,7 +20,7 @@ import type { DeviceInfo, LogEntry, ProcessExit } from '@rnctl/sdk';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 type Tone = 'accent' | 'good' | 'warn' | 'bad' | 'muted' | 'text';
-type ScreenId = 'devices' | 'logs' | 'metro' | 'environment' | 'broadcast';
+type ScreenId = 'devices' | 'logs' | 'metro' | 'environment' | 'broadcast' | 'storage';
 type DeviceFilter = 'all' | 'ios' | 'android';
 type Platform = 'ios' | 'android';
 type MetroStatus = 'unknown' | 'running' | 'stopped';
@@ -47,6 +47,10 @@ interface LogSession {
 }
 interface AttachResult { sessionId: string; started: boolean; message: string }
 interface NetworkStatus { available: boolean; reason?: string; targets: number; attached: boolean }
+interface StorageApp { id: string; platform: Platform }
+type StorageKind = 'asyncstorage-json' | 'asyncstorage-sqlite' | 'sqlite' | 'mmkv';
+interface StorageSourceInfo { id: string; kind: StorageKind; path: string; available: boolean; reason?: string }
+interface StorageEntry { key: string; value: string }
 interface NetworkEntry {
   id: string;
   timestamp: number;
@@ -70,6 +74,7 @@ const SCREENS: ReadonlyArray<{ id: ScreenId; label: string; key: string }> = [
   { id: 'metro', label: 'Metro', key: '3' },
   { id: 'environment', label: 'Environment', key: '4' },
   { id: 'broadcast', label: 'Broadcast', key: '5' },
+  { id: 'storage', label: 'Storage', key: '6' },
 ];
 
 /** Flat, neutral near-black palette: every surface is a shade of grey, not blue. */
@@ -549,6 +554,98 @@ function BroadcastScreen({ summary, darkEnabled, prompt, promptValue, onReload, 
   );
 }
 
+function StorageScreen({ step, apps, appId, sources, sourceId, entries, entryKey, onSelectApp, onSelectSource, onSelectEntry }: {
+  step: number;
+  apps: StorageApp[] | undefined;
+  appId: string | null;
+  sources: StorageSourceInfo[] | undefined;
+  sourceId: string | null;
+  entries: StorageEntry[];
+  entryKey: string | null;
+  onSelectApp: (app: StorageApp) => void;
+  onSelectSource: (source: StorageSourceInfo) => void;
+  onSelectEntry: (entry: StorageEntry) => void;
+}): ReactNode {
+  const row = (key: string, marker: string, label: string, meta: string, active: boolean, tone: Tone, onPress: () => void): ReactNode => createElement(
+    'box',
+    {
+      key,
+      height: 1,
+      flexDirection: 'row',
+      gap: 1,
+      paddingX: 1,
+      flexShrink: 0,
+      backgroundColor: active ? C.selected : undefined,
+      onMouseUp: onPress,
+    },
+    t(marker, { fg: active ? C.accent : C[tone], shrink: true }),
+    t(label, { fg: active ? C.text : C[tone], shrink: true, truncate: true }),
+    t(meta, { fg: C.muted, dim: true, shrink: true, truncate: true }),
+  );
+  const list: ReactNode[] = step === 0
+    ? apps === undefined
+      ? [t('Loading apps…', { fg: C.muted, dim: true })]
+      : apps.length === 0
+        ? [t('No apps found on booted devices.', { fg: C.muted, dim: true })]
+        : apps.map((app) => row(
+          `app-${app.id}`,
+          app.id === appId ? '▸' : ' ',
+          app.id,
+          app.platform === 'ios' ? 'iOS' : 'AND',
+          app.id === appId,
+          'text',
+          () => onSelectApp(app),
+        ))
+    : step === 1
+      ? sources === undefined
+        ? [t('Loading sources…', { fg: C.muted, dim: true })]
+        : sources.length === 0
+          ? [t('No storage sources found.', { fg: C.muted, dim: true })]
+          : sources.map((source) => row(
+            `source-${source.id}`,
+            source.available ? (source.id === sourceId ? '▸' : ' ') : '⊘',
+            source.kind,
+            source.available ? cut(source.path, 30) : cut(source.reason ?? 'unavailable', 30),
+            source.id === sourceId,
+            source.available ? 'text' : 'muted',
+            () => onSelectSource(source),
+          ))
+      : entries.length === 0
+        ? [t('No entries found in this source.', { fg: C.muted, dim: true })]
+        : entries.map((entry) => row(
+          `entry-${entry.key}`,
+          entry.key === entryKey ? '▸' : ' ',
+          cut(entry.key, 28),
+          cut(entry.value, 36),
+          entry.key === entryKey,
+          'text',
+          () => onSelectEntry(entry),
+        ));
+  return panel(
+    'Storage',
+    step === 0 ? 'apps' : step === 1 ? 'sources' : `${entries.length} entries`,
+    createElement(
+      'box',
+      { flexDirection: 'column', flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden' },
+      createElement(
+        'box',
+        { flexDirection: 'row', gap: 1, flexShrink: 0 },
+        t(step === 0 ? '▸1 Apps' : '1 Apps', { fg: step === 0 ? C.accent : C.muted }),
+        t('›', { fg: C.muted }),
+        t(step === 1 ? '▸2 Sources' : '2 Sources', { fg: step === 1 ? C.accent : C.muted }),
+        t('›', { fg: C.muted }),
+        t(step === 2 ? '▸3 Entries' : '3 Entries', { fg: step === 2 ? C.accent : C.muted }),
+      ),
+      createElement(
+        'scrollbox',
+        { flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden', scrollY: true, scrollbarOptions: { visible: false, showArrows: false } },
+        list,
+      ),
+      t('Read-only · ↑↓ select · Enter open · Esc back', { fg: C.muted, dim: true, truncate: true }),
+    ),
+  );
+}
+
 function EnvironmentScreen({ health }: { health: HealthCheck[] | undefined }): ReactNode {
   const ok = health?.filter((check) => check.ok).length ?? 0;
   return panel(
@@ -630,6 +727,7 @@ function SideMenu({ active, filter, counts, onScreen, onFilter }: {
     entry('metro', 'Metro', '3'),
     entry('environment', 'Environment', '4'),
     entry('broadcast', 'Broadcast', '5'),
+    entry('storage', 'Storage', '6'),
   );
 }
 
@@ -687,6 +785,13 @@ function Dashboard({ client }: { client: RpcClient }) {
   const [darkEnabled, setDarkEnabled] = useState(false);
   const [networkStatus, setNetworkStatus] = useState<NetworkStatus | null>(null);
   const [networkEntries, setNetworkEntries] = useState<NetworkEntry[]>([]);
+  const [storageApps, setStorageApps] = useState<StorageApp[] | undefined>(undefined);
+  const [storageStep, setStorageStep] = useState(0);
+  const [storageApp, setStorageApp] = useState<string | null>(null);
+  const [storageSources, setStorageSources] = useState<StorageSourceInfo[] | undefined>(undefined);
+  const [storageSource, setStorageSource] = useState<string | null>(null);
+  const [storageEntries, setStorageEntries] = useState<StorageEntry[]>([]);
+  const [storageEntryKey, setStorageEntryKey] = useState<string | null>(null);
   const columns = renderer.width || 80;
 
   const refreshSources = (): void => {
@@ -707,6 +812,65 @@ function Dashboard({ client }: { client: RpcClient }) {
       .catch((reason: unknown) => {
         if (mounted.current) setNotice({ text: `network.status: ${reasonText(reason)}`, tone: 'bad' });
       });
+  };
+
+  const refreshStorageApps = (): void => {
+    void client.call<{ apps: StorageApp[] }>('storage.apps', {})
+      .then((result) => { if (mounted.current) setStorageApps(result.apps); })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `storage.apps: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const openStorageApp = (app: StorageApp): void => {
+    setStorageStep(1);
+    setStorageApp(app.id);
+    setStorageSources(undefined);
+    setStorageSource(null);
+    setStorageEntries([]);
+    setStorageEntryKey(null);
+    void client.call<{ sources: StorageSourceInfo[] }>('storage.sources', { app: app.id, platform: app.platform })
+      .then((result) => { if (mounted.current) setStorageSources(result.sources); })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `storage.sources: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const openStorageSource = (source: StorageSourceInfo): void => {
+    if (!source.available) {
+      setNotice({ text: source.reason ?? 'Storage source is unavailable', tone: 'warn' });
+      return;
+    }
+    const app = storageApps?.find((candidate) => candidate.id === storageApp);
+    if (!app) return;
+    setStorageStep(2);
+    setStorageSource(source.id);
+    setStorageEntries([]);
+    setStorageEntryKey(null);
+    void client.call<{ available: boolean; reason?: string; entries: StorageEntry[] }>('storage.read', {
+      app: app.id,
+      platform: app.platform,
+      source: source.id,
+      kind: source.kind,
+      limit: MAX_LOGS,
+    })
+      .then((result) => {
+        if (!mounted.current) return;
+        if (!result.available) {
+          setNotice({ text: result.reason ?? 'Storage read is unavailable', tone: 'warn' });
+          return;
+        }
+        setStorageEntries(result.entries);
+        setStorageEntryKey(result.entries[0]?.key ?? null);
+      })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `storage.read: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const showStorageValue = (entry: StorageEntry): void => {
+    setStorageEntryKey(entry.key);
+    setNotice({ text: `${cut(entry.key, 24)} = ${entry.value.slice(0, 120)}`, tone: 'muted' });
   };
 
   const loadNetwork = (): void => {
@@ -1002,6 +1166,7 @@ function Dashboard({ client }: { client: RpcClient }) {
 
   useEffect(() => {
     if (active === 'logs') { refreshSources(); refreshNetworkStatus(); }
+    if (active === 'storage') refreshStorageApps();
   }, [active, client]);
 
   const tabIds: Array<string | null> = [null, ...sessions.map((session) => session.sessionId)];
@@ -1076,9 +1241,15 @@ function Dashboard({ client }: { client: RpcClient }) {
       if (sources[index]) attachSource(sources[index]!);
       return;
     }
-    if (/^[1-5]$/.test(name)) {
+    if (/^[1-6]$/.test(name)) {
       key.preventDefault();
       setActive(SCREENS[Number(name) - 1]!.id);
+      return;
+    }
+    if (active === 'storage' && (name === 'escape' || name === 'esc' || name === 'backspace')) {
+      key.preventDefault();
+      if (storageStep === 2) { setStorageStep(1); setStorageSource(null); setStorageEntries([]); setStorageEntryKey(null); }
+      else if (storageStep === 1) { setStorageStep(0); setStorageSources(undefined); setStorageSource(null); }
       return;
     }
     if (active === 'broadcast') {
@@ -1107,12 +1278,37 @@ function Dashboard({ client }: { client: RpcClient }) {
       } else if (active === 'logs' && sources.length > 0) {
         key.preventDefault();
         setSelectedSourceIndex((current) => Math.max(0, Math.min(sources.length - 1, current + (name === 'up' ? -1 : 1))));
+      } else if (active === 'storage') {
+        key.preventDefault();
+        const dir = name === 'up' ? -1 : 1;
+        const move = <T,>(items: T[], current: T | null, keyOf: (item: T) => string, select: (item: T) => void): void => {
+          if (items.length === 0) return;
+          const index = current === null ? -1 : items.findIndex((item) => keyOf(item) === keyOf(current));
+          const next = Math.max(0, Math.min(items.length - 1, (index < 0 ? 0 : index) + dir));
+          select(items[next]!);
+        };
+        if (storageStep === 0) move(storageApps ?? [], storageApps?.find((app) => app.id === storageApp) ?? null, (item) => item.id, (item) => setStorageApp(item.id));
+        else if (storageStep === 1) move(storageSources ?? [], storageSources?.find((source) => source.id === storageSource) ?? null, (item) => item.id, (item) => setStorageSource(item.id));
+        else move(storageEntries, storageEntries.find((entry) => entry.key === storageEntryKey) ?? null, (item) => item.key, (item) => setStorageEntryKey(item.key));
       }
       return; // other screens keep focus so their scrollbox handles arrows
     }
     if (name === 'return' || name === 'enter') {
       if (active === 'metro' && selectedScript) { key.preventDefault(); runScript(selectedScript); }
       else if (active === 'logs' && sources[selectedSourceIndex]) { key.preventDefault(); attachSource(sources[selectedSourceIndex]!); }
+      else if (active === 'storage') {
+        key.preventDefault();
+        if (storageStep === 0) {
+          const app = storageApps?.find((candidate) => candidate.id === storageApp);
+          if (app) openStorageApp(app);
+        } else if (storageStep === 1) {
+          const source = storageSources?.find((candidate) => candidate.id === storageSource);
+          if (source) openStorageSource(source);
+        } else {
+          const entry = storageEntries.find((candidate) => candidate.key === storageEntryKey);
+          if (entry) showStorageValue(entry);
+        }
+      }
       return;
     }
     if (name === 'i') { setActive('environment'); return; }
@@ -1183,6 +1379,20 @@ function Dashboard({ client }: { client: RpcClient }) {
       break;
     case 'environment':
       screen = createElement(EnvironmentScreen, { health });
+      break;
+    case 'storage':
+      screen = createElement(StorageScreen, {
+        step: storageStep,
+        apps: storageApps,
+        appId: storageApp,
+        sources: storageSources,
+        sourceId: storageSource,
+        entries: storageEntries,
+        entryKey: storageEntryKey,
+        onSelectApp: (app) => { setStorageApp(app.id); openStorageApp(app); },
+        onSelectSource: (source) => { setStorageSource(source.id); openStorageSource(source); },
+        onSelectEntry: showStorageValue,
+      });
       break;
     case 'broadcast':
       screen = createElement(BroadcastScreen, {
@@ -1279,7 +1489,7 @@ function Dashboard({ client }: { client: RpcClient }) {
         justifyContent: 'center',
       },
       t(`${notice.tone === 'bad' ? '✗' : '›'} ${notice.text}`, { fg: C[notice.tone], truncate: true }),
-      t('1-5/←→ screens · ↑↓ · b/p/f/a device · r/d/t cast · s/x metro · q quit', {
+      t('1-6/←→ screens · ↑↓ · b/p/f/a device · r/d/t cast · s/x metro · q quit', {
         fg: C.muted,
         dim: true,
         truncate: true,
