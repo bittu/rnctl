@@ -110,7 +110,10 @@ export default definePlugin({
   4. `@rnctl/plugin-devices`, `@rnctl/plugin-doctor`: real simctl/adb discovery and environment probes.
   5. `@rnctl/tui` & `rnctl` CLI: OpenTUI dashboard with fixed viewport, scrollboxes, mouse support and tabbed screens; CLI commands (`rnctl`, `rnctl devices`, `rnctl metro`, `rnctl nuke`, `rnctl web`, `rnctl up`).
 * **[ ] Phase 1.5 — Interaction & UX (user-requested, see section 7):** side menu, per-device action menus, per-source log tabs, project/package.json awareness, startup logo and non-RN warning.
-* **[ ] Phase 2 — Daily Accelerators:** Multi-device broadcast commands (simultaneous reload/deep-link/dark-mode), GPS/network presets, and `@rnctl/plugin-doctor` (`rnctl nuke` cache cleaner).
+* **[~] Phase 2 — Daily Accelerators:**
+  1. `[x]` `@rnctl/plugin-broadcast`: reload, deep-link and dark-mode across all booted devices, exposed over RPC and `rnctl broadcast`.
+  2. `[x]` `@rnctl/plugin-doctor`: safe `nuke` with whitelisted targets, preview/dry-run, explicit confirmation and reclaimed-space stats.
+  3. `[ ]` `@rnctl/plugin-simulator-tweaks`: GPS/network presets, status-bar overrides and mock push notifications.
 * **[ ] Phase 3 — Deep Inspection:** Zero-SDK network request inspector, AsyncStorage/MMKV viewer, Hermes crash/FPS profiler.
 * **[ ] Phase 4 — AI & Ecosystem:** Built-in MCP server (`@rnctl/plugin-mcp`) exposing live logs and device actions to AI coding agents, plus `rnctl plugin create <name>`.
 

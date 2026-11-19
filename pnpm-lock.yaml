@@ -32,6 +32,9 @@ importers:
       '@rnctl/core':
         specifier: workspace:*
         version: link:../core
+      '@rnctl/plugin-broadcast':
+        specifier: workspace:*
+        version: link:../plugin-broadcast
       '@rnctl/plugin-devices':
         specifier: workspace:*
         version: link:../plugin-devices
@@ -70,6 +73,12 @@ importers:
       '@types/ws':
         specifier: ^8.18.2
         version: 8.18.2
+
+  packages/plugin-broadcast:
+    dependencies:
+      '@rnctl/sdk':
+        specifier: workspace:*
+        version: link:../sdk
 
   packages/plugin-devices:
     dependencies:

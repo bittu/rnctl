@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@rnctl/core": "workspace:*",
+    "@rnctl/plugin-broadcast": "workspace:*",
     "@rnctl/plugin-devices": "workspace:*",
     "@rnctl/plugin-doctor": "workspace:*",
     "@rnctl/plugin-logs": "workspace:*",
