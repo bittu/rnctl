@@ -33,6 +33,7 @@
     "@rnctl/plugin-metro": "workspace:*",
     "@rnctl/plugin-network": "workspace:*",
     "@rnctl/plugin-perf": "workspace:*",
+    "@rnctl/plugin-scaffolder": "workspace:*",
     "@rnctl/plugin-storage": "workspace:*",
     "@rnctl/sdk": "workspace:*",
     "@rnctl/tui": "workspace:*",

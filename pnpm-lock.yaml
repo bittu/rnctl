@@ -56,6 +56,9 @@ importers:
       '@rnctl/plugin-perf':
         specifier: workspace:*
         version: link:../plugin-perf
+      '@rnctl/plugin-scaffolder':
+        specifier: workspace:*
+        version: link:../plugin-scaffolder
       '@rnctl/plugin-storage':
         specifier: workspace:*
         version: link:../plugin-storage
@@ -132,6 +135,12 @@ importers:
         version: link:../sdk
 
   packages/plugin-perf:
+    dependencies:
+      '@rnctl/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+
+  packages/plugin-scaffolder:
     dependencies:
       '@rnctl/sdk':
         specifier: workspace:*
