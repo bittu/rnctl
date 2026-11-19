@@ -36,33 +36,38 @@ function setupActions() {
   const rpcs = new Map<string, RpcMethod>();
   const exec = vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 }));
   const spawn = vi.fn(async (id: string) => ({ id, pid: 99 }));
+  const emit = vi.fn(async () => {});
   const ctx = {
-    bus: { on: vi.fn(), off: vi.fn(), emit: vi.fn(), onAny: vi.fn() },
+    bus: { on: vi.fn(), off: vi.fn(), emit, onAny: vi.fn() },
     logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     processes: { spawn, exec, stop: vi.fn(), write: vi.fn() },
     registerRpc: (name: string, method: RpcMethod) => { rpcs.set(name, method); },
     registerCommand: vi.fn(),
   } as unknown as PluginContext;
-  return { ctx, rpcs, exec, spawn };
+  return { ctx, rpcs, exec, spawn, emit };
 }
 
 describe('device actions', () => {
   it('boots an Android AVD through the process gateway', async () => {
-    const { ctx, rpcs, spawn } = setupActions();
+    const { ctx, rpcs, spawn, emit } = setupActions();
     await plugin.setup(ctx);
     const result = await rpcs.get('devices.boot')!.handler({ id: 'Pixel_9', platform: 'android' });
     expect(result).toEqual({ ok: true, message: 'Emulator starting (pid 99)' });
     expect(spawn).toHaveBeenCalledWith('emulator:Pixel_9', 'emulator', ['-avd', 'Pixel_9']);
+    expect(emit).toHaveBeenCalledWith('device:booted', { id: 'Pixel_9', deviceId: 'Pixel_9', platform: 'android' });
   });
 
   it('shuts down, installs and runs Android apps via adb', async () => {
-    const { ctx, rpcs, exec } = setupActions();
+    const { ctx, rpcs, exec, emit } = setupActions();
     await plugin.setup(ctx);
 
     await rpcs.get('devices.shutdown')!.handler({ id: 'emulator-5554', platform: 'android' });
     await rpcs.get('devices.installApp')!.handler({ id: 'emulator-5554', platform: 'android', path: '/tmp/app.apk' });
     await rpcs.get('devices.runApp')!.handler({ id: 'emulator-5554', platform: 'android', app: 'com.example' });
 
+    expect(emit).toHaveBeenCalledWith('device:shutdown', {
+      id: 'emulator-5554', deviceId: 'emulator-5554', platform: 'android',
+    });
     expect(exec).toHaveBeenNthCalledWith(1, 'adb', ['-s', 'emulator-5554', 'emu', 'kill']);
     expect(exec).toHaveBeenNthCalledWith(2, 'adb', ['-s', 'emulator-5554', 'install', '-r', '/tmp/app.apk']);
     expect(exec).toHaveBeenNthCalledWith(3, 'adb', [

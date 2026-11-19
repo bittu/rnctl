@@ -108,15 +108,23 @@ export default definePlugin({
       : { ok: false, message: 'iOS simulator actions require macOS' };
 
     const deviceInput = z.object({ id: z.string(), platform: z.enum(['ios', 'android']).optional() });
+    const emitDeviceChange = (topic: string, id: string, platform: 'ios' | 'android'): void => {
+      void ctx.bus.emit(topic, { id, deviceId: id, platform });
+    };
 
     ctx.registerRpc('devices.boot', {
       inputSchema: deviceInput,
       handler: async ({ id, platform }) => {
         const resolved = await platformFor(id, platform);
         if (!resolved) return { ok: false, message: `Unknown device: ${id}` };
-        if (resolved === 'ios') return iosOnly() ?? run('xcrun', ['simctl', 'boot', id]);
+        if (resolved === 'ios') {
+          const result = iosOnly() ?? await run('xcrun', ['simctl', 'boot', id]);
+          if (result.ok) emitDeviceChange('device:booted', id, resolved);
+          return result;
+        }
         try {
           const handle = await ctx.processes.spawn(`emulator:${id}`, 'emulator', ['-avd', id]);
+          emitDeviceChange('device:booted', id, resolved);
           return { ok: true, message: `Emulator starting (pid ${handle.pid ?? 'unknown'})` };
         } catch (error) {
           return { ok: false, message: String(error) };
@@ -129,8 +137,11 @@ export default definePlugin({
       handler: async ({ id, platform }) => {
         const resolved = await platformFor(id, platform);
         if (!resolved) return { ok: false, message: `Unknown device: ${id}` };
-        if (resolved === 'ios') return iosOnly() ?? run('xcrun', ['simctl', 'shutdown', id]);
-        return run('adb', ['-s', id, 'emu', 'kill']);
+        const result = resolved === 'ios'
+          ? iosOnly() ?? await run('xcrun', ['simctl', 'shutdown', id])
+          : await run('adb', ['-s', id, 'emu', 'kill']);
+        if (result.ok) emitDeviceChange('device:shutdown', id, resolved);
+        return result;
       },
     });
 

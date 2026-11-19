@@ -7,32 +7,35 @@ function setup() {
   const spawn = vi.fn(async () => ({ id: 'metro', pid: 1234 }));
   const stop = vi.fn(async () => {});
   const write = vi.fn(async () => {});
+  const emit = vi.fn(async () => {});
   const ctx = {
-    bus: { on: vi.fn(), off: vi.fn(), emit: vi.fn(), onAny: vi.fn() },
+    bus: { on: vi.fn(), off: vi.fn(), emit, onAny: vi.fn() },
     logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     processes: { spawn, exec: vi.fn(), stop, write },
     registerRpc: (name: string, method: RpcMethod) => { rpcs.set(name, method); },
     registerCommand: vi.fn(),
   } as unknown as PluginContext;
-  return { ctx, rpcs, spawn, stop, write };
+  return { ctx, rpcs, spawn, stop, write, emit };
 }
 
 describe('plugin-metro', () => {
   it('starts Metro with a deterministic id and reset-cache flag', async () => {
-    const { ctx, rpcs, spawn } = setup();
+    const { ctx, rpcs, spawn, emit } = setup();
     await plugin.setup(ctx);
 
     const result = await rpcs.get('metro.start')!.handler({ resetCache: true, cwd: '/app' });
     expect(result).toEqual({ started: true, pid: 1234 });
+    expect(emit).toHaveBeenCalledWith('metro:ready', { pid: 1234 });
     expect(spawn).toHaveBeenCalledWith('metro', 'npx', ['react-native', 'start', '--reset-cache'], { cwd: '/app' });
   });
 
   it('stops Metro via the process gateway', async () => {
-    const { ctx, rpcs, stop } = setup();
+    const { ctx, rpcs, stop, emit } = setup();
     await plugin.setup(ctx);
 
     expect(await rpcs.get('metro.stop')!.handler({})).toEqual({ stopped: true });
     expect(stop).toHaveBeenCalledWith('metro');
+    expect(emit).toHaveBeenCalledWith('metro:stopped', { id: 'metro' });
   });
 
   it('sends reload and dev-menu keys to Metro stdin', async () => {

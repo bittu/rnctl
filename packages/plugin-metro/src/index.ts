@@ -8,6 +8,7 @@ export default definePlugin({
   description: 'Metro bundler and app build supervision',
   async setup(ctx) {
     // shortcut: Expo project detection is not implemented; Metro CLI is assumed.
+    const emit = (topic: string, payload: unknown): void => { void ctx.bus.emit(topic, payload); };
     ctx.registerRpc('metro.start', {
       inputSchema: z.object({
         resetCache: z.boolean().default(false),
@@ -17,9 +18,11 @@ export default definePlugin({
         const args = ['react-native', 'start', ...(resetCache ? ['--reset-cache'] : [])];
         try {
           const handle = await ctx.processes.spawn(PROCESS_ID, 'npx', args, { cwd });
+          emit('metro:ready', { pid: handle.pid });
           return { started: true, pid: handle.pid };
         } catch (error) {
           ctx.logger.debug(`Metro start skipped: ${String(error)}`);
+          emit('metro:error', { message: String(error) });
           return { started: false, pid: undefined };
         }
       },
@@ -29,6 +32,7 @@ export default definePlugin({
       inputSchema: z.object({}),
       handler: async () => {
         await ctx.processes.stop(PROCESS_ID);
+        emit('metro:stopped', { id: PROCESS_ID });
         return { stopped: true };
       },
     });
@@ -57,6 +61,7 @@ export default definePlugin({
       action: async (args, pluginCtx) => {
         if (args[0] === 'stop') {
           await pluginCtx.processes.stop(PROCESS_ID);
+          void pluginCtx.bus.emit('metro:stopped', { id: PROCESS_ID });
           pluginCtx.logger.info('Metro stop requested.');
           return;
         }
@@ -67,8 +72,10 @@ export default definePlugin({
             'npx',
             ['react-native', 'start', ...(resetCache ? ['--reset-cache'] : [])],
           );
+          void pluginCtx.bus.emit('metro:ready', { pid: handle.pid });
           pluginCtx.logger.info(`Metro started (pid ${handle.pid ?? 'unknown'}).`);
         } catch (error) {
+          void pluginCtx.bus.emit('metro:error', { message: String(error) });
           pluginCtx.logger.warn(`Metro did not start: ${String(error)}`);
         }
       },
