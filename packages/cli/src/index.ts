@@ -3,12 +3,14 @@ import { createDaemon, discoverPlugins, RpcClient } from '@rnctl/core';
 import broadcast from '@rnctl/plugin-broadcast';
 import devices from '@rnctl/plugin-devices';
 import doctor from '@rnctl/plugin-doctor';
+import e2e from '@rnctl/plugin-e2e';
 import logs from '@rnctl/plugin-logs';
 import mcp from '@rnctl/plugin-mcp';
 import metro from '@rnctl/plugin-metro';
 import network from '@rnctl/plugin-network';
 import perf from '@rnctl/plugin-perf';
 import scaffolder from '@rnctl/plugin-scaffolder';
+import simulatorTweaks from '@rnctl/plugin-simulator-tweaks';
 import storage from '@rnctl/plugin-storage';
 import type { Logger } from '@rnctl/sdk';
 import { renderDashboard } from '@rnctl/tui';
@@ -35,7 +37,7 @@ const logger: Logger = {
 async function main(): Promise<void> {
   const daemon = createDaemon(logger);
   let webServer: WebServer | undefined;
-  for (const plugin of [devices, metro, logs, doctor, broadcast, network, storage, perf, mcp, scaffolder]) {
+  for (const plugin of [devices, metro, logs, doctor, broadcast, network, storage, perf, mcp, scaffolder, simulatorTweaks, e2e]) {
     await daemon.loader.load(plugin);
   }
   for (const plugin of await discoverPlugins()) {

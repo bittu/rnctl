@@ -41,6 +41,9 @@ importers:
       '@rnctl/plugin-doctor':
         specifier: workspace:*
         version: link:../plugin-doctor
+      '@rnctl/plugin-e2e':
+        specifier: workspace:*
+        version: link:../plugin-e2e
       '@rnctl/plugin-logs':
         specifier: workspace:*
         version: link:../plugin-logs
@@ -59,6 +62,9 @@ importers:
       '@rnctl/plugin-scaffolder':
         specifier: workspace:*
         version: link:../plugin-scaffolder
+      '@rnctl/plugin-simulator-tweaks':
+        specifier: workspace:*
+        version: link:../plugin-simulator-tweaks
       '@rnctl/plugin-storage':
         specifier: workspace:*
         version: link:../plugin-storage
@@ -107,6 +113,12 @@ importers:
         specifier: workspace:*
         version: link:../sdk
 
+  packages/plugin-e2e:
+    dependencies:
+      '@rnctl/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+
   packages/plugin-logs:
     dependencies:
       '@rnctl/sdk':
@@ -144,6 +156,12 @@ importers:
         version: link:../sdk
 
   packages/plugin-scaffolder:
+    dependencies:
+      '@rnctl/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+
+  packages/plugin-simulator-tweaks:
     dependencies:
       '@rnctl/sdk':
         specifier: workspace:*

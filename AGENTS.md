@@ -110,10 +110,10 @@ export default definePlugin({
   4. `@rnctl/plugin-devices`, `@rnctl/plugin-doctor`: real simctl/adb discovery and environment probes.
   5. `@rnctl/tui` & `rnctl` CLI: OpenTUI dashboard with fixed viewport, scrollboxes, mouse support and tabbed screens; CLI commands (`rnctl`, `rnctl devices`, `rnctl metro`, `rnctl nuke`, `rnctl web`, `rnctl up`).
 * **[ ] Phase 1.5 — Interaction & UX (user-requested, see section 7):** side menu, per-device action menus, per-source log tabs, project/package.json awareness, startup logo and non-RN warning.
-* **[~] Phase 2 — Daily Accelerators:**
+* **[x] Phase 2 — Daily Accelerators:**
   1. `[x]` `@rnctl/plugin-broadcast`: reload, deep-link and dark-mode across all booted devices, exposed over RPC and `rnctl broadcast`.
   2. `[x]` `@rnctl/plugin-doctor`: safe `nuke` with whitelisted targets, preview/dry-run, explicit confirmation and reclaimed-space stats.
-  3. `[ ]` `@rnctl/plugin-simulator-tweaks`: GPS/network presets, status-bar overrides and mock push notifications.
+  3. `[x]` `@rnctl/plugin-simulator-tweaks`: iOS/Android location, appearance, status-bar, network, battery and mock-push controls with per-target availability.
 * **[~] Phase 3 — Deep Inspection:**
   1. `[x]` `@rnctl/plugin-network`: zero-SDK network capture via Metro's CDP inspector proxy (RN 0.83+), with a Network tab in the TUI.
   2. `[x]` `@rnctl/plugin-storage`: AsyncStorage/SQLite viewer with a TUI explorer, app termination before copy, backups and confirmed key writes. MMKV remains unsupported (no parser/encryption key).
@@ -121,6 +121,7 @@ export default definePlugin({
 * **[x] Phase 4 — AI & Ecosystem:**
   1. `@rnctl/plugin-mcp`: local stdio MCP server exposed via `rnctl mcp`, with read-only tools for project/device/log/doctor state and Metro controls.
   2. `@rnctl/plugin-scaffolder`: `rnctl plugin create <name>` generates publishable `rnctl-plugin-*` packages.
+  3. `@rnctl/plugin-e2e`: discovers and runs Maestro flows and Detox tests against booted devices, with pass/fail events and artifact screenshots.
 
 ---
 
