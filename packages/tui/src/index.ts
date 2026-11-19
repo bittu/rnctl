@@ -20,11 +20,11 @@ import type { DeviceInfo, LogEntry, ProcessExit } from '@rnctl/sdk';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 type Tone = 'accent' | 'good' | 'warn' | 'bad' | 'muted' | 'text';
-type ScreenId = 'devices' | 'logs' | 'metro' | 'environment' | 'broadcast' | 'storage';
+type ScreenId = 'devices' | 'logs' | 'metro' | 'environment' | 'broadcast' | 'storage' | 'perf';
 type DeviceFilter = 'all' | 'ios' | 'android';
 type Platform = 'ios' | 'android';
 type MetroStatus = 'unknown' | 'running' | 'stopped';
-type PromptKind = 'installApp' | 'runApp' | 'deepLink' | 'storageEdit';
+type PromptKind = 'installApp' | 'runApp' | 'deepLink' | 'storageEdit' | 'perfSourcemap' | 'perfStack' | 'perfApp';
 interface Notice { text: string; tone: Tone }
 interface ActionResult { ok: boolean; message: string }
 interface BroadcastItem { id: string; platform: string; ok: boolean; message: string }
@@ -51,6 +51,26 @@ interface StorageApp { id: string; platform: Platform }
 type StorageKind = 'asyncstorage-json' | 'asyncstorage-sqlite' | 'sqlite' | 'mmkv';
 interface StorageSourceInfo { id: string; kind: StorageKind; path: string; available: boolean; reason?: string }
 interface StorageEntry { key: string; value: string }
+interface PerfCrash {
+  id: string;
+  platform: Platform;
+  app: string;
+  timestamp: number;
+  kind: 'js' | 'native';
+  source: string;
+  excerpt: string;
+  frames: string[];
+}
+interface FpsSample {
+  id: string;
+  timestamp: number;
+  platform: 'android';
+  app: string;
+  uiFps?: number;
+  jankyPct?: number;
+  p90Ms?: number;
+  p95Ms?: number;
+}
 interface NetworkEntry {
   id: string;
   timestamp: number;
@@ -75,6 +95,7 @@ const SCREENS: ReadonlyArray<{ id: ScreenId; label: string; key: string }> = [
   { id: 'environment', label: 'Environment', key: '4' },
   { id: 'broadcast', label: 'Broadcast', key: '5' },
   { id: 'storage', label: 'Storage', key: '6' },
+  { id: 'perf', label: 'Perf', key: '7' },
 ];
 
 /** Flat, neutral near-black palette: every surface is a shade of grey, not blue. */
@@ -660,6 +681,80 @@ function StorageScreen({ step, apps, appId, sources, sourceId, entries, entryKey
   );
 }
 
+function PerfScreen({ crashes, selectedCrashId, symbolicated, fpsApp, fpsStarted, fpsSamples, prompt, promptValue, onSelectCrash, onSymbolicate, onToggleFps }: {
+  crashes: PerfCrash[] | undefined;
+  selectedCrashId: string | null;
+  symbolicated: string | null;
+  fpsApp: string | null;
+  fpsStarted: boolean;
+  fpsSamples: FpsSample[];
+  prompt: PromptKind | null;
+  promptValue: string;
+  onSelectCrash: (crash: PerfCrash) => void;
+  onSymbolicate: () => void;
+  onToggleFps: () => void;
+}): ReactNode {
+  const crashRow = (crash: PerfCrash): ReactNode => createElement(
+    'box',
+    {
+      key: crash.id,
+      height: 1,
+      flexDirection: 'row',
+      gap: 1,
+      paddingX: 1,
+      flexShrink: 0,
+      backgroundColor: crash.id === selectedCrashId ? C.selected : undefined,
+      onMouseUp: () => onSelectCrash(crash),
+    },
+    t(crash.id === selectedCrashId ? '▸' : ' ', { fg: crash.id === selectedCrashId ? C.accent : C.muted, shrink: true }),
+    t(crash.platform === 'ios' ? 'iOS' : 'AND', { fg: C.muted, shrink: true }),
+    t(crash.kind === 'js' ? 'JS' : 'NAT', { fg: crash.kind === 'js' ? C.accent : C.warn, shrink: true }),
+    t(cut(crash.app, 14), { fg: C.text, shrink: true, truncate: true }),
+    t(cut(crash.excerpt.split('\n')[0] ?? '', 24), { fg: C.muted, dim: true, shrink: true, truncate: true }),
+  );
+  const sampleRow = (sample: FpsSample): ReactNode => createElement(
+    'box',
+    { key: sample.id, flexDirection: 'row', gap: 1, height: 1, flexShrink: 0 },
+    t(clock(sample.timestamp), { fg: C.muted, dim: true, shrink: true }),
+    t(`${Math.round(sample.uiFps ?? 0)}fps`, { fg: C.good, shrink: true }),
+    t(`jank ${sample.jankyPct === undefined ? '—' : `${Math.round(sample.jankyPct)}%`}`, { fg: C.warn, shrink: true }),
+    t(`p95 ${sample.p95Ms === undefined ? '—' : `${Math.round(sample.p95Ms)}ms`}`, { fg: C.muted, shrink: true }),
+  );
+  return panel(
+    'Perf',
+    fpsStarted ? `sampling ${fpsApp ?? ''}` : undefined,
+    createElement(
+      'scrollbox',
+      { flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden', scrollY: true, scrollbarOptions: { visible: false, showArrows: false } },
+      prompt && prompt.startsWith('perf') ? createElement(
+        'box',
+        { flexDirection: 'column', flexShrink: 0 },
+        t(prompt === 'perfSourcemap' ? 'Source map path' : prompt === 'perfStack' ? 'Stack text' : 'App package name', { fg: C.muted }),
+        t(`${cut(promptValue, 48)}▌`, { fg: C.text }),
+        t('Enter next · Esc cancel', { fg: C.muted, dim: true }),
+      ) : null,
+      t('Crashes', { fg: C.muted, bold: true }),
+      crashes === undefined
+        ? t('Loading crashes…', { fg: C.muted, dim: true })
+        : crashes.length === 0
+          ? t('No crashes found.', { fg: C.muted, dim: true })
+          : crashes.slice(0, 8).map(crashRow),
+      t('Symbolicate', { fg: C.muted, bold: true }),
+      symbolicated
+        ? t(cut(symbolicated.split('\n')[0] ?? '', 60), { fg: C.text })
+        : t('No symbolicated stack. Press s to supply a source map and stack.', { fg: C.muted, dim: true }),
+      t('Frame rate', { fg: C.muted, bold: true }),
+      t(fpsStarted
+        ? `Sampling ${fpsApp ?? ''} · f stop · ${fpsSamples.length} samples`
+        : `Idle · f start (Android only)`, { fg: fpsStarted ? C.good : C.muted }),
+      fpsSamples.length === 0
+        ? t('No FPS samples yet.', { fg: C.muted, dim: true })
+        : fpsSamples.slice(-4).map(sampleRow),
+      t('↑↓ crash · Enter detail · s symbolicate · f start/stop', { fg: C.muted, dim: true }),
+    ),
+  );
+}
+
 function EnvironmentScreen({ health }: { health: HealthCheck[] | undefined }): ReactNode {
   const ok = health?.filter((check) => check.ok).length ?? 0;
   return panel(
@@ -742,6 +837,7 @@ function SideMenu({ active, filter, counts, onScreen, onFilter }: {
     entry('environment', 'Environment', '4'),
     entry('broadcast', 'Broadcast', '5'),
     entry('storage', 'Storage', '6'),
+    entry('perf', 'Perf', '7'),
   );
 }
 
@@ -807,6 +903,13 @@ function Dashboard({ client }: { client: RpcClient }) {
   const [storageEntries, setStorageEntries] = useState<StorageEntry[]>([]);
   const [storageEntryKey, setStorageEntryKey] = useState<string | null>(null);
   const [confirmWrite, setConfirmWrite] = useState(false);
+  const [perfCrashes, setPerfCrashes] = useState<PerfCrash[] | undefined>(undefined);
+  const [selectedCrashId, setSelectedCrashId] = useState<string | null>(null);
+  const [symbolicated, setSymbolicated] = useState<string | null>(null);
+  const [perfSourcemap, setPerfSourcemap] = useState('');
+  const [fpsApp, setFpsApp] = useState<string | null>(null);
+  const [fpsStarted, setFpsStarted] = useState(false);
+  const [fpsSamples, setFpsSamples] = useState<FpsSample[]>([]);
   const columns = renderer.width || 80;
 
   const refreshSources = (): void => {
@@ -827,6 +930,82 @@ function Dashboard({ client }: { client: RpcClient }) {
       .catch((reason: unknown) => {
         if (mounted.current) setNotice({ text: `network.status: ${reasonText(reason)}`, tone: 'bad' });
       });
+  };
+
+  const refreshCrashes = (): void => {
+    // adb logcat -d blocks when no Android device is attached; stay on the local .ips path then.
+    const androidBooted = devices.some((device) => device.platform === 'android' && device.state === 'booted');
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled || !mounted.current) return;
+      settled = true;
+      setPerfCrashes([]);
+      setNotice({ text: 'Crash buffer unavailable (timed out)', tone: 'muted' });
+    }, 2500);
+    const finish = (): void => { settled = true; clearTimeout(timer); };
+    void client.call<{ crashes: PerfCrash[] }>('perf.crashes', { limit: 50, platform: androidBooted ? undefined : 'ios' })
+      .then((result) => {
+        if (!mounted.current || settled) return;
+        finish();
+        setPerfCrashes(result.crashes);
+        if (result.crashes.length === 0) setNotice({ text: 'No crash reports found on this device', tone: 'muted' });
+      })
+      .catch((reason: unknown) => {
+        if (!mounted.current || settled) return;
+        finish();
+        setNotice({ text: `perf.crashes: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const loadFpsSamples = (): void => {
+    void client.call<{ samples: FpsSample[] }>('perf.fpsSamples', { limit: MAX_LOGS })
+      .then((result) => { if (mounted.current) setFpsSamples(result.samples); })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `perf.fpsSamples: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const showCrashDetail = (crash: PerfCrash): void => {
+    setSelectedCrashId(crash.id);
+    const detail = crash.frames[0] ?? crash.excerpt.split('\n')[0] ?? 'no detail';
+    setNotice({ text: `${crash.platform}/${crash.kind} ${crash.app}: ${cut(detail, 90)}`, tone: 'warn' });
+  };
+
+  const startFps = (app: string): void => {
+    void client.call<{ started: boolean; id?: string; reason?: string }>('perf.fpsStart', { app })
+      .then((result) => {
+        if (!mounted.current) return;
+        if (!result.started) {
+          setNotice({ text: result.reason ?? 'FPS sampling could not start', tone: 'bad' });
+          return;
+        }
+        setFpsApp(app);
+        setFpsStarted(true);
+        setNotice({ text: result.reason ?? `Sampling ${app}`, tone: 'good' });
+      })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `perf.fpsStart: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const toggleFps = (): void => {
+    if (fpsStarted) {
+      void client.call<{ stopped: boolean }>('perf.fpsStop', {})
+        .then((result) => {
+          if (!mounted.current) return;
+          setFpsStarted(false);
+          setNotice({ text: result.stopped ? 'FPS sampling stopped' : 'FPS sampling was not running', tone: result.stopped ? 'good' : 'warn' });
+        })
+        .catch((reason: unknown) => {
+          if (mounted.current) setNotice({ text: `perf.fpsStop: ${reasonText(reason)}`, tone: 'bad' });
+        });
+      return;
+    }
+    const crash = perfCrashes?.find((item) => item.id === selectedCrashId);
+    if (crash?.platform === 'ios') { setNotice({ text: 'FPS sampling is Android only', tone: 'warn' }); return; }
+    const app = fpsApp ?? crash?.app ?? project?.name;
+    if (!app) { startPrompt('perfApp'); return; }
+    startFps(app);
   };
 
   const refreshStorageApps = (): void => {
@@ -1174,6 +1353,9 @@ function Dashboard({ client }: { client: RpcClient }) {
       client.on<NetworkEntry>('network:request', (entry) => {
         if (live) setNetworkEntries((current) => [...current.slice(-(MAX_LOGS - 1)), entry]);
       }),
+      client.on<FpsSample>('perf:fps-sample', (sample) => {
+        if (live) setFpsSamples((current) => [...current.slice(-(MAX_LOGS - 1)), sample]);
+      }),
       client.on('device:list-updated', refreshDevices),
       client.on('device:booted', refreshDevices),
       client.on('device:shutdown', refreshDevices),
@@ -1206,6 +1388,12 @@ function Dashboard({ client }: { client: RpcClient }) {
   }, [project, selectedScript]);
 
   useEffect(() => {
+    if (!perfCrashes) return;
+    if (perfCrashes.length === 0) { if (selectedCrashId !== null) setSelectedCrashId(null); return; }
+    if (!perfCrashes.some((crash) => crash.id === selectedCrashId)) setSelectedCrashId(perfCrashes[0]!.id);
+  }, [perfCrashes, selectedCrashId]);
+
+  useEffect(() => {
     if (active === 'devices' && selectedDevice) {
       devicesScroll.current?.scrollChildIntoView(`dev-${selectedDevice.id}`, { align: 'nearest' });
     }
@@ -1232,6 +1420,7 @@ function Dashboard({ client }: { client: RpcClient }) {
   useEffect(() => {
     if (active === 'logs') { refreshSources(); refreshNetworkStatus(); }
     if (active === 'storage') refreshStorageApps();
+    if (active === 'perf') { refreshCrashes(); loadFpsSamples(); }
   }, [active, client]);
 
   const tabIds: Array<string | null> = [null, ...sessions.map((session) => session.sessionId)];
@@ -1250,7 +1439,8 @@ function Dashboard({ client }: { client: RpcClient }) {
   };
 
   const startPrompt = (kind: PromptKind): void => {
-    if (kind !== 'deepLink' && !selectedDevice) { setNotice({ text: 'Select a device first', tone: 'warn' }); return; }
+    const deviceFree = kind === 'deepLink' || kind.startsWith('perf');
+    if (!deviceFree && !selectedDevice) { setNotice({ text: 'Select a device first', tone: 'warn' }); return; }
     setPrompt(kind);
     setPromptValue('');
   };
@@ -1263,6 +1453,33 @@ function Dashboard({ client }: { client: RpcClient }) {
       if (!value.includes(':')) { setNotice({ text: 'Enter a URL, e.g. https://…', tone: 'warn' }); return; }
       runBroadcast('broadcast.deepLink', { url: value }, 'Deep link');
       setPrompt(null);
+      return;
+    }
+    if (prompt === 'perfSourcemap') {
+      setPerfSourcemap(value);
+      setPrompt('perfStack');
+      setPromptValue('');
+      return;
+    }
+    if (prompt === 'perfStack') {
+      void client.call<{ available: boolean; reason?: string; symbolicated?: string }>('perf.symbolicate', { sourcemap: perfSourcemap, stack: value })
+        .then((result) => {
+          if (!mounted.current) return;
+          setNotice({
+            text: result.available ? cut(result.symbolicated ?? 'Symbolicated', 140) : (result.reason ?? 'Symbolication unavailable'),
+            tone: result.available ? 'good' : 'bad',
+          });
+          if (result.available) setSymbolicated(result.symbolicated ?? 'Symbolicated');
+        })
+        .catch((reason: unknown) => {
+          if (mounted.current) setNotice({ text: `perf.symbolicate: ${reasonText(reason)}`, tone: 'bad' });
+        });
+      setPrompt(null);
+      return;
+    }
+    if (prompt === 'perfApp') {
+      setPrompt(null);
+      startFps(value);
       return;
     }
     if (!selectedDevice) { setPrompt(null); return; }
@@ -1318,10 +1535,14 @@ function Dashboard({ client }: { client: RpcClient }) {
       if (sources[index]) attachSource(sources[index]!);
       return;
     }
-    if (/^[1-6]$/.test(name)) {
+    if (/^[1-7]$/.test(name)) {
       key.preventDefault();
       setActive(SCREENS[Number(name) - 1]!.id);
       return;
+    }
+    if (active === 'perf') {
+      if (name === 's') { key.preventDefault(); startPrompt('perfSourcemap'); return; }
+      if (name === 'f') { key.preventDefault(); toggleFps(); return; }
     }
     if (active === 'storage' && (name === 'escape' || name === 'esc' || name === 'backspace')) {
       key.preventDefault();
@@ -1367,6 +1588,11 @@ function Dashboard({ client }: { client: RpcClient }) {
         if (storageStep === 0) move(storageApps ?? [], storageApps?.find((app) => app.id === storageApp) ?? null, (item) => item.id, (item) => setStorageApp(item.id));
         else if (storageStep === 1) move(storageSources ?? [], storageSources?.find((source) => source.id === storageSource) ?? null, (item) => item.id, (item) => setStorageSource(item.id));
         else move(storageEntries, storageEntries.find((entry) => entry.key === storageEntryKey) ?? null, (item) => item.key, (item) => setStorageEntryKey(item.key));
+      } else if (active === 'perf' && perfCrashes && perfCrashes.length > 0) {
+        key.preventDefault();
+        const index = perfCrashes.findIndex((crash) => crash.id === selectedCrashId);
+        const next = Math.max(0, Math.min(perfCrashes.length - 1, (index < 0 ? 0 : index) + (name === 'up' ? -1 : 1)));
+        setSelectedCrashId(perfCrashes[next]!.id);
       }
       return; // other screens keep focus so their scrollbox handles arrows
     }
@@ -1385,6 +1611,10 @@ function Dashboard({ client }: { client: RpcClient }) {
           const entry = storageEntries.find((candidate) => candidate.key === storageEntryKey);
           if (entry) startStorageEdit(entry);
         }
+      } else if (active === 'perf') {
+        key.preventDefault();
+        const crash = perfCrashes?.find((candidate) => candidate.id === selectedCrashId) ?? perfCrashes?.[0];
+        if (crash) showCrashDetail(crash);
       }
       return;
     }
@@ -1456,6 +1686,21 @@ function Dashboard({ client }: { client: RpcClient }) {
       break;
     case 'environment':
       screen = createElement(EnvironmentScreen, { health });
+      break;
+    case 'perf':
+      screen = createElement(PerfScreen, {
+        crashes: perfCrashes,
+        selectedCrashId,
+        symbolicated,
+        fpsApp,
+        fpsStarted,
+        fpsSamples,
+        prompt,
+        promptValue,
+        onSelectCrash: showCrashDetail,
+        onSymbolicate: () => startPrompt('perfSourcemap'),
+        onToggleFps: toggleFps,
+      });
       break;
     case 'storage':
       screen = createElement(StorageScreen, {
@@ -1569,7 +1814,7 @@ function Dashboard({ client }: { client: RpcClient }) {
         justifyContent: 'center',
       },
       t(`${notice.tone === 'bad' ? '✗' : '›'} ${notice.text}`, { fg: C[notice.tone], truncate: true }),
-      t('1-6/←→ screens · ↑↓ · b/p/f/a device · r/d/t cast · s/x metro · q quit', {
+      t('1-7/←→ screens · ↑↓ · b/p/f/a device · r/d/t cast · s/x metro · q quit', {
         fg: C.muted,
         dim: true,
         truncate: true,

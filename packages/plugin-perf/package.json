@@ -1,0 +1,38 @@
+{
+  "name": "@rnctl/plugin-perf",
+  "version": "0.1.0",
+  "description": "Hermes crash collection, symbolication and Android frame-rate sampling",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@rnctl/sdk": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bittu/rnctl.git"
+  },
+  "homepage": "https://github.com/bittu/rnctl#readme",
+  "engines": {
+    "node": ">=26.4.0"
+  }
+}

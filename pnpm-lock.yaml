@@ -50,6 +50,9 @@ importers:
       '@rnctl/plugin-network':
         specifier: workspace:*
         version: link:../plugin-network
+      '@rnctl/plugin-perf':
+        specifier: workspace:*
+        version: link:../plugin-perf
       '@rnctl/plugin-storage':
         specifier: workspace:*
         version: link:../plugin-storage
@@ -111,6 +114,12 @@ importers:
         version: link:../sdk
 
   packages/plugin-network:
+    dependencies:
+      '@rnctl/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+
+  packages/plugin-perf:
     dependencies:
       '@rnctl/sdk':
         specifier: workspace:*

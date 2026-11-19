@@ -117,7 +117,7 @@ export default definePlugin({
 * **[~] Phase 3 — Deep Inspection:**
   1. `[x]` `@rnctl/plugin-network`: zero-SDK network capture via Metro's CDP inspector proxy (RN 0.83+), with a Network tab in the TUI.
   2. `[x]` `@rnctl/plugin-storage`: AsyncStorage/SQLite viewer with a TUI explorer, app termination before copy, backups and confirmed key writes. MMKV remains unsupported (no parser/encryption key).
-  3. `[ ]` `@rnctl/plugin-perf`: Hermes crash symbolication and FPS profiling.
+  3. `[x]` `@rnctl/plugin-perf`: crash collection (logcat crash buffer / iOS `.ips`), `metro-symbolicate` integration and Android `dumpsys gfxinfo` FPS sampling, with a TUI Perf screen.
 * **[ ] Phase 4 — AI & Ecosystem:** Built-in MCP server (`@rnctl/plugin-mcp`) exposing live logs and device actions to AI coding agents, plus `rnctl plugin create <name>`.
 
 ---
