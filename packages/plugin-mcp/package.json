@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
+    "@rnctl/core": "workspace:*",
     "@rnctl/sdk": "workspace:*"
   },
   "repository": {

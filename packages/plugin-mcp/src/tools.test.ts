@@ -16,6 +16,15 @@ describe('MCP tool bridge', () => {
     expect(handler).toHaveBeenCalledWith(expect.objectContaining({ limit: 2 }));
   });
 
+  it('calls through a connected daemon client', async () => {
+    const call = vi.fn(async () => ({ devices: [] }));
+    const run = createToolRunner({ call });
+    const result = await run('rnctl_device_list', {});
+    expect(result.isError).toBe(false);
+    expect(JSON.parse(result.text)).toEqual({ devices: [] });
+    expect(call).toHaveBeenCalledWith('devices.list', {});
+  });
+
   it('reports unknown tools, missing RPCs and invalid input', async () => {
     const run = createToolRunner({ getRpc: () => undefined } as Pick<PluginContext, 'getRpc'>);
     expect((await run('rnctl_unknown', {})).isError).toBe(true);

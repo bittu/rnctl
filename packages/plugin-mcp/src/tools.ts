@@ -78,20 +78,32 @@ export interface ToolResult {
   isError: boolean;
 }
 
-/** Bridges MCP tool calls to the daemon's registered RPC methods. */
-export function createToolRunner(ctx: Pick<PluginContext, 'getRpc'>) {
+export interface RpcCaller {
+  call(method: string, params: unknown): Promise<unknown>;
+}
+
+export type RpcSource = Pick<PluginContext, 'getRpc'> | RpcCaller;
+
+/** Bridges MCP tool calls to either in-process RPCs or a connected daemon client. */
+export function createToolRunner(source: RpcSource) {
   return async (name: string, args: unknown): Promise<ToolResult> => {
     const tool = TOOLS.find((candidate) => candidate.name === name);
     if (!tool) return { text: `Unknown tool: ${name}`, isError: true };
 
-    const rpc: RpcMethod | undefined = ctx.getRpc(tool.rpc);
-    if (!rpc) return { text: `RPC ${tool.rpc} is unavailable`, isError: true };
-
     const parsed = tool.inputSchema.safeParse(args ?? {});
     if (!parsed.success) return { text: parsed.error.message, isError: true };
 
+    const inProcess = 'getRpc' in source;
+    if (!inProcess && typeof source.call !== 'function') {
+      return { text: `RPC ${tool.rpc} is unavailable`, isError: true };
+    }
+    const rpc: RpcMethod | undefined = inProcess ? source.getRpc(tool.rpc) : undefined;
+    if (inProcess && !rpc) return { text: `RPC ${tool.rpc} is unavailable`, isError: true };
+
     try {
-      const result = await rpc.handler(parsed.data);
+      const result = inProcess
+        ? await rpc!.handler(parsed.data)
+        : await (source as RpcCaller).call(tool.rpc, parsed.data);
       let text = JSON.stringify(result);
       if (text.length > MAX_TEXT) text = `${text.slice(0, MAX_TEXT)}… (truncated)`;
       return { text, isError: false };
