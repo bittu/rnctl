@@ -5,7 +5,7 @@
  *
  * Screens: 1-4 or [/] or ←/→ or click · devices: ↑/↓ or click · r reload · d dev
  * menu · s start · x stop · c clear logs · i environment · b boot · p shutdown ·
- * f install app · a run app · q/Ctrl+C quit.
+ * f install app · a run app · broadcast: r/d/t · q/Ctrl+C quit.
  */
 import {
   createCliRenderer,
@@ -20,13 +20,16 @@ import type { DeviceInfo, LogEntry, ProcessExit } from '@rnctl/sdk';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 type Tone = 'accent' | 'good' | 'warn' | 'bad' | 'muted' | 'text';
-type ScreenId = 'devices' | 'logs' | 'metro' | 'environment';
+type ScreenId = 'devices' | 'logs' | 'metro' | 'environment' | 'broadcast';
 type DeviceFilter = 'all' | 'ios' | 'android';
 type Platform = 'ios' | 'android';
 type MetroStatus = 'unknown' | 'running' | 'stopped';
-type PromptKind = 'installApp' | 'runApp';
+type PromptKind = 'installApp' | 'runApp' | 'deepLink';
 interface Notice { text: string; tone: Tone }
 interface ActionResult { ok: boolean; message: string }
+interface BroadcastItem { id: string; platform: string; ok: boolean; message: string }
+interface BroadcastResult { results: BroadcastItem[]; sent: number }
+interface BroadcastSummary { label: string; sent: number; results: BroadcastItem[] }
 interface HealthCheck { name: string; ok: boolean; detail: string }
 interface ProjectInfo {
   name: string;
@@ -50,6 +53,7 @@ const SCREENS: ReadonlyArray<{ id: ScreenId; label: string; key: string }> = [
   { id: 'logs', label: 'Logs', key: '2' },
   { id: 'metro', label: 'Metro', key: '3' },
   { id: 'environment', label: 'Environment', key: '4' },
+  { id: 'broadcast', label: 'Broadcast', key: '5' },
 ];
 
 /** Flat, neutral near-black palette: every surface is a shade of grey, not blue. */
@@ -236,7 +240,7 @@ function DeviceActions({ device, width, prompt, promptValue, onBoot, onShutdown,
     ) : createElement(
       'box',
       { key: 'prompt', flexDirection: 'column', flexShrink: 0 },
-      t(prompt === 'installApp' ? 'Install path' : 'Bundle / package', { fg: C.muted }),
+      t(prompt === 'installApp' ? 'Install path' : prompt === 'deepLink' ? 'Deep link URL' : 'Bundle / package', { fg: C.muted }),
       t(`${cut(promptValue, width - 3)}▌`, { fg: C.text }),
       t('↵ ok · esc cancel', { fg: C.muted, dim: true }),
     ),
@@ -457,6 +461,52 @@ function MetroScreen({ metro, scripts, selectedScript, commandWidth, visibleRows
   );
 }
 
+function BroadcastScreen({ summary, darkEnabled, prompt, promptValue, onReload, onDeepLink, onDarkMode }: {
+  summary: BroadcastSummary | null;
+  darkEnabled: boolean;
+  prompt: PromptKind | null;
+  promptValue: string;
+  onReload: () => void;
+  onDeepLink: () => void;
+  onDarkMode: () => void;
+}): ReactNode {
+  const failed = summary?.results.filter((item) => !item.ok) ?? [];
+  const ok = summary ? summary.results.length - failed.length : 0;
+  return panel(
+    'Broadcast',
+    summary ? `${summary.sent} targets` : 'all booted devices',
+    createElement(
+      'box',
+      { flexDirection: 'column', flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden' },
+      prompt === 'deepLink' ? createElement(
+        'box',
+        { flexDirection: 'column', flexShrink: 0 },
+        t('Deep link URL', { fg: C.muted }),
+        t(`${cut(promptValue, 48)}▌`, { fg: C.text }),
+        t('↵ ok · esc cancel', { fg: C.muted, dim: true }),
+      ) : createElement(
+        'box',
+        { flexDirection: 'column', flexShrink: 0 },
+        wiredAction('r Reload JS', 'accent', onReload),
+        wiredAction('d Open deep link', 'accent', onDeepLink),
+        wiredAction(`t Dark mode ${darkEnabled ? 'off' : 'on'}`, 'warn', onDarkMode),
+      ),
+      t('Last broadcast', { fg: C.muted, bold: true }),
+      summary === null
+        ? t('No broadcast yet.', { fg: C.muted, dim: true })
+        : createElement(
+          'box',
+          { flexDirection: 'column', flexShrink: 0 },
+          t(`${summary.label} · sent ${summary.sent} · ${ok} ok · ${failed.length} failed`, {
+            fg: failed.length > 0 ? C.warn : C.good,
+          }),
+          failed.slice(0, 6).map((item) => t(`✗ ${cut(item.id, 16)}: ${cut(item.message, 52)}`, { fg: C.bad, truncate: true })),
+        ),
+      t('Keys: r reload · d deep link · t dark mode', { fg: C.muted, dim: true }),
+    ),
+  );
+}
+
 function EnvironmentScreen({ health }: { health: HealthCheck[] | undefined }): ReactNode {
   const ok = health?.filter((check) => check.ok).length ?? 0;
   return panel(
@@ -537,6 +587,7 @@ function SideMenu({ active, filter, counts, onScreen, onFilter }: {
     entry('logs', 'Logs', '2'),
     entry('metro', 'Metro', '3'),
     entry('environment', 'Environment', '4'),
+    entry('broadcast', 'Broadcast', '5'),
   );
 }
 
@@ -590,6 +641,8 @@ function Dashboard({ client }: { client: RpcClient }) {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [selectedSourceIndex, setSelectedSourceIndex] = useState(0);
   const [scriptScrollTop, setScriptScrollTop] = useState(0);
+  const [broadcastSummary, setBroadcastSummary] = useState<BroadcastSummary | null>(null);
+  const [darkEnabled, setDarkEnabled] = useState(false);
   const columns = renderer.width || 80;
 
   const refreshSources = (): void => {
@@ -663,6 +716,24 @@ function Dashboard({ client }: { client: RpcClient }) {
       })
       .catch((reason: unknown) => {
         if (mounted.current) setNotice({ text: `logs.clear: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const runBroadcast = (method: 'broadcast.reload' | 'broadcast.deepLink' | 'broadcast.darkMode', params: unknown, label: string): void => {
+    void client.call<BroadcastResult>(method, params)
+      .then((result) => {
+        if (!mounted.current) return;
+        setBroadcastSummary({ label, sent: result.sent, results: result.results });
+        const failed = result.results.filter((item) => !item.ok);
+        setNotice({
+          text: failed.length > 0
+            ? `${label}: ${failed.length} failed · ${failed[0]?.message ?? ''}`
+            : `${label}: sent to ${result.sent} targets`,
+          tone: failed.length > 0 ? 'bad' : 'good',
+        });
+      })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `${method}: ${reasonText(reason)}`, tone: 'bad' });
       });
   };
 
@@ -812,7 +883,7 @@ function Dashboard({ client }: { client: RpcClient }) {
   };
 
   const startPrompt = (kind: PromptKind): void => {
-    if (!selectedDevice) { setNotice({ text: 'Select a device first', tone: 'warn' }); return; }
+    if (kind !== 'deepLink' && !selectedDevice) { setNotice({ text: 'Select a device first', tone: 'warn' }); return; }
     setPrompt(kind);
     setPromptValue('');
   };
@@ -820,7 +891,14 @@ function Dashboard({ client }: { client: RpcClient }) {
   const submitPrompt = (): void => {
     const value = promptValue.trim();
     if (!value) { setNotice({ text: 'Enter a value first', tone: 'warn' }); return; }
-    if (!selectedDevice || !prompt) { setPrompt(null); return; }
+    if (!prompt) return;
+    if (prompt === 'deepLink') {
+      if (!value.includes(':')) { setNotice({ text: 'Enter a URL, e.g. https://…', tone: 'warn' }); return; }
+      runBroadcast('broadcast.deepLink', { url: value }, 'Deep link');
+      setPrompt(null);
+      return;
+    }
+    if (!selectedDevice) { setPrompt(null); return; }
     const params = prompt === 'installApp'
       ? { id: selectedDevice.id, platform: selectedDevice.platform, path: value }
       : { id: selectedDevice.id, platform: selectedDevice.platform, app: value };
@@ -861,10 +939,21 @@ function Dashboard({ client }: { client: RpcClient }) {
       if (sources[index]) attachSource(sources[index]!);
       return;
     }
-    if (/^[1-4]$/.test(name)) {
+    if (/^[1-5]$/.test(name)) {
       key.preventDefault();
       setActive(SCREENS[Number(name) - 1]!.id);
       return;
+    }
+    if (active === 'broadcast') {
+      if (name === 'r') { key.preventDefault(); runBroadcast('broadcast.reload', {}, 'Reload JS'); return; }
+      if (name === 'd') { key.preventDefault(); startPrompt('deepLink'); return; }
+      if (name === 't') {
+        key.preventDefault();
+        const enabled = !darkEnabled;
+        setDarkEnabled(enabled);
+        runBroadcast('broadcast.darkMode', { enabled }, `Dark mode ${enabled ? 'on' : 'off'}`);
+        return;
+      }
     }
     if (name === 'up' || name === 'down') {
       if (active === 'devices' && ordered.length > 0) {
@@ -954,6 +1043,21 @@ function Dashboard({ client }: { client: RpcClient }) {
     case 'environment':
       screen = createElement(EnvironmentScreen, { health });
       break;
+    case 'broadcast':
+      screen = createElement(BroadcastScreen, {
+        summary: broadcastSummary,
+        darkEnabled,
+        prompt,
+        promptValue,
+        onReload: () => runBroadcast('broadcast.reload', {}, 'Reload JS'),
+        onDeepLink: () => startPrompt('deepLink'),
+        onDarkMode: () => {
+          const enabled = !darkEnabled;
+          setDarkEnabled(enabled);
+          runBroadcast('broadcast.darkMode', { enabled }, `Dark mode ${enabled ? 'on' : 'off'}`);
+        },
+      });
+      break;
     default:
       // Keep the device name + platform + state on one line: 27 cols of chrome, 19 of row overhead.
       const actionWidth = columns >= 120 ? 28 : 20;
@@ -1034,7 +1138,7 @@ function Dashboard({ client }: { client: RpcClient }) {
         justifyContent: 'center',
       },
       t(`${notice.tone === 'bad' ? '✗' : '›'} ${notice.text}`, { fg: C[notice.tone], truncate: true }),
-      t('1-4/←→ screens · ↑↓ · b boot · p down · f install · a run · r/d/s/x · q quit', {
+      t('1-5/←→ screens · ↑↓ · b/p/f/a device · r/d/t cast · s/x metro · q quit', {
         fg: C.muted,
         dim: true,
         truncate: true,
