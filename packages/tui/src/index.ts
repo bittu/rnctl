@@ -46,8 +46,24 @@ interface LogSession {
   entries: LogEntry[];
 }
 interface AttachResult { sessionId: string; started: boolean; message: string }
+interface NetworkStatus { available: boolean; reason?: string; targets: number; attached: boolean }
+interface NetworkEntry {
+  id: string;
+  timestamp: number;
+  requestId: string;
+  method: string;
+  url: string;
+  status?: number;
+  statusText?: string;
+  resourceType?: string;
+  durationMs?: number;
+  requestHeaders: Record<string, string>;
+  responseHeaders: Record<string, string>;
+  errorText?: string;
+}
 
 const MAX_LOGS = 200;
+const NETWORK_SESSION_ID = 'network';
 const SCREENS: ReadonlyArray<{ id: ScreenId; label: string; key: string }> = [
   { id: 'devices', label: 'Devices', key: '1' },
   { id: 'logs', label: 'Logs', key: '2' },
@@ -283,19 +299,22 @@ function logTone(level: LogEntry['level']): Tone {
   return level === 'error' ? 'bad' : level === 'warn' ? 'warn' : level === 'debug' ? 'muted' : 'accent';
 }
 
-function LogsScreen({ entries, sources, sessions, activeSessionId, selectedSourceIndex, compact, onSelectTab, onCloseTab, onAttachSource, onSelectSource }: {
+function LogsScreen({ entries, sources, sessions, activeSessionId, selectedSourceIndex, compact, networkEntries, onSelectTab, onCloseTab, onAttachSource, onSelectSource, onNetworkRow }: {
   entries: LogEntry[];
   sources: LogSource[];
   sessions: LogSession[];
   activeSessionId: string | null;
   selectedSourceIndex: number;
   compact: boolean;
+  networkEntries: NetworkEntry[];
   onSelectTab: (sessionId: string | null) => void;
   onCloseTab: (sessionId: string) => void;
   onAttachSource: (source: LogSource) => void;
   onSelectSource: (index: number) => void;
+  onNetworkRow: (entry: NetworkEntry) => void;
 }): ReactNode {
   const visible = activeSessionId === null ? entries : sessions.find((session) => session.sessionId === activeSessionId)?.entries ?? [];
+  const networkActive = activeSessionId === NETWORK_SESSION_ID;
   const chip = (key: string, label: string, active: boolean, tone: Tone, onPress: () => void): ReactNode => createElement(
     'box',
     {
@@ -317,7 +336,7 @@ function LogsScreen({ entries, sources, sessions, activeSessionId, selectedSourc
   };
   return panel(
     'Live logs',
-    `${visible.length} entries · ${sessions.length} tabs`,
+    `${networkActive ? networkEntries.length : visible.length} entries · ${sessions.length} tabs`,
     createElement(
       'box',
       { flexDirection: 'column', flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden' },
@@ -361,16 +380,39 @@ function LogsScreen({ entries, sources, sessions, activeSessionId, selectedSourc
           focused: true,
           scrollbarOptions: { visible: false, showArrows: false },
         },
-        visible.length === 0
-          ? t('No entries in this stream yet. Attach a source or start Metro.', { fg: C.muted, dim: true })
-          : visible.map((entry) => createElement(
-            'box',
-            { key: entry.id, flexDirection: 'row', gap: 1, height: 1, flexShrink: 0 },
-            t(clock(entry.timestamp), { fg: C.muted, dim: true }),
-            t(entry.level.slice(0, 5).toUpperCase(), { fg: C[logTone(entry.level)] }),
-            t(entry.source, { fg: C.muted }),
-            t(cut(entry.message, 120), { grow: true, truncate: true }),
-          )),
+        networkActive
+          ? networkEntries.length === 0
+            ? t('No requests captured yet.', { fg: C.muted, dim: true })
+            : networkEntries.slice(-MAX_LOGS).map((entry) => {
+              const failed = Boolean(entry.errorText) || (entry.status !== undefined && entry.status >= 400);
+              let target = entry.url;
+              try { target = `${new URL(entry.url).host}${new URL(entry.url).pathname}`; } catch { /* keep raw url */ }
+              return createElement(
+                'box',
+                {
+                  key: entry.id,
+                  flexDirection: 'row',
+                  gap: 1,
+                  height: 1,
+                  flexShrink: 0,
+                  onMouseUp: () => onNetworkRow(entry),
+                },
+                t(entry.method.slice(0, 4).padEnd(4), { fg: C.accent, shrink: true }),
+                t(entry.errorText ? 'ERR' : String(entry.status ?? '···'), { fg: failed ? C.bad : C.good, shrink: true }),
+                t(cut(target, 36), { fg: C.text, shrink: true }),
+                t(entry.durationMs === undefined ? '' : `${Math.round(entry.durationMs)}ms`, { fg: C.muted, shrink: true }),
+              );
+            })
+          : visible.length === 0
+            ? t('No entries in this stream yet. Attach a source or start Metro.', { fg: C.muted, dim: true })
+            : visible.map((entry) => createElement(
+              'box',
+              { key: entry.id, flexDirection: 'row', gap: 1, height: 1, flexShrink: 0 },
+              t(clock(entry.timestamp), { fg: C.muted, dim: true }),
+              t(entry.level.slice(0, 5).toUpperCase(), { fg: C[logTone(entry.level)] }),
+              t(entry.source, { fg: C.muted }),
+              t(cut(entry.message, 120), { grow: true, truncate: true }),
+            )),
       ),
     ),
   );
@@ -643,6 +685,8 @@ function Dashboard({ client }: { client: RpcClient }) {
   const [scriptScrollTop, setScriptScrollTop] = useState(0);
   const [broadcastSummary, setBroadcastSummary] = useState<BroadcastSummary | null>(null);
   const [darkEnabled, setDarkEnabled] = useState(false);
+  const [networkStatus, setNetworkStatus] = useState<NetworkStatus | null>(null);
+  const [networkEntries, setNetworkEntries] = useState<NetworkEntry[]>([]);
   const columns = renderer.width || 80;
 
   const refreshSources = (): void => {
@@ -657,7 +701,70 @@ function Dashboard({ client }: { client: RpcClient }) {
       });
   };
 
+  const refreshNetworkStatus = (): void => {
+    void client.call<NetworkStatus>('network.status', {})
+      .then((result) => { if (mounted.current) setNetworkStatus(result); })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `network.status: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const loadNetwork = (): void => {
+    void client.call<{ entries: NetworkEntry[] }>('network.list', { limit: MAX_LOGS })
+      .then((result) => { if (mounted.current) setNetworkEntries(result.entries); })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `network.list: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const showNetworkBody = (entry: NetworkEntry): void => {
+    void client.call<{ available: boolean; body?: string; base64Encoded?: boolean }>('network.body', { requestId: entry.requestId })
+      .then((result) => {
+        if (!mounted.current) return;
+        const body = result.body?.replace(/\s+/g, ' ').slice(0, 120) ?? '';
+        setNotice({
+          text: !result.available || !body
+            ? `${entry.method} ${cut(entry.url, 40)}: no body`
+            : `${entry.method} ${cut(entry.url, 30)}: ${body}`,
+          tone: result.available && body ? 'muted' : 'warn',
+        });
+      })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `network.body: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
+  const attachNetwork = (): void => {
+    void client.call<NetworkStatus>('network.status', {})
+      .then((status) => {
+        if (!mounted.current) return;
+        setNetworkStatus(status);
+        if (!status.available) {
+          setNotice({ text: status.reason ?? 'Network inspector is unavailable', tone: 'warn' });
+          return;
+        }
+        void client.call<{ attached: boolean; target?: string; message: string }>('network.attach', {})
+          .then((result) => {
+            if (!mounted.current) return;
+            setNotice({ text: result.message || (result.attached ? 'Network attached' : 'Network attach failed'), tone: result.attached ? 'good' : 'bad' });
+            if (!result.attached) return;
+            setSessions((current) => current.some((session) => session.sessionId === NETWORK_SESSION_ID)
+              ? current
+              : [...current, { sessionId: NETWORK_SESSION_ID, source: 'network', label: 'Network', entries: [] }]);
+            setActiveSessionId(NETWORK_SESSION_ID);
+            loadNetwork();
+          })
+          .catch((reason: unknown) => {
+            if (mounted.current) setNotice({ text: `network.attach: ${reasonText(reason)}`, tone: 'bad' });
+          });
+      })
+      .catch((reason: unknown) => {
+        if (mounted.current) setNotice({ text: `network.status: ${reasonText(reason)}`, tone: 'bad' });
+      });
+  };
+
   const loadSession = (sessionId: string): void => {
+    if (sessionId === NETWORK_SESSION_ID) { loadNetwork(); return; }
     void client.call<{ entries: LogEntry[] }>('logs.list', { sessionId, limit: MAX_LOGS })
       .then((result) => {
         if (mounted.current) setSessions((current) => current.map((session) =>
@@ -669,6 +776,7 @@ function Dashboard({ client }: { client: RpcClient }) {
   };
 
   const attachSource = (source: LogSource): void => {
+    if (source.id === 'network') { attachNetwork(); return; }
     if (!source.available) {
       setNotice({ text: source.reason ?? `${source.label} is unavailable`, tone: 'warn' });
       return;
@@ -693,6 +801,20 @@ function Dashboard({ client }: { client: RpcClient }) {
   };
 
   const closeTab = (sessionId: string): void => {
+    if (sessionId === NETWORK_SESSION_ID) {
+      void client.call<{ detached: boolean }>('network.detach', {})
+        .then((result) => {
+          if (!mounted.current) return;
+          setNotice({ text: result.detached ? 'Network detached' : 'Network was not attached', tone: result.detached ? 'good' : 'warn' });
+          setSessions((current) => current.filter((session) => session.sessionId !== NETWORK_SESSION_ID));
+          setActiveSessionId((current) => current === NETWORK_SESSION_ID ? null : current);
+          setNetworkStatus((current) => current ? { ...current, attached: false } : current);
+        })
+        .catch((reason: unknown) => {
+          if (mounted.current) setNotice({ text: `network.detach: ${reasonText(reason)}`, tone: 'bad' });
+        });
+      return;
+    }
     void client.call<{ detached: boolean }>('logs.detach', { sessionId })
       .then((result) => {
         if (!mounted.current) return;
@@ -707,6 +829,18 @@ function Dashboard({ client }: { client: RpcClient }) {
   };
 
   const clearLogs = (): void => {
+    if (activeSessionId === NETWORK_SESSION_ID) {
+      void client.call<{ cleared: boolean }>('network.clear', {})
+        .then((result) => {
+          if (!mounted.current) return;
+          setNotice({ text: result.cleared ? 'Network requests cleared' : 'Clear failed', tone: result.cleared ? 'good' : 'bad' });
+          if (result.cleared) setNetworkEntries([]);
+        })
+        .catch((reason: unknown) => {
+          if (mounted.current) setNotice({ text: `network.clear: ${reasonText(reason)}`, tone: 'bad' });
+        });
+      return;
+    }
     void client.call<{ cleared: true }>('logs.clear', {})
       .then((result) => {
         if (!mounted.current) return;
@@ -808,6 +942,9 @@ function Dashboard({ client }: { client: RpcClient }) {
           return matches ? { ...session, entries: [...session.entries.slice(-(MAX_LOGS - 1)), entry] } : session;
         }));
       }),
+      client.on<NetworkEntry>('network:request', (entry) => {
+        if (live) setNetworkEntries((current) => [...current.slice(-(MAX_LOGS - 1)), entry]);
+      }),
       client.on('device:list-updated', refreshDevices),
       client.on('device:booted', refreshDevices),
       client.on('device:shutdown', refreshDevices),
@@ -864,7 +1001,7 @@ function Dashboard({ client }: { client: RpcClient }) {
   }, [active, client]);
 
   useEffect(() => {
-    if (active === 'logs') refreshSources();
+    if (active === 'logs') { refreshSources(); refreshNetworkStatus(); }
   }, [active, client]);
 
   const tabIds: Array<string | null> = [null, ...sessions.map((session) => session.sessionId)];
@@ -1004,16 +1141,19 @@ function Dashboard({ client }: { client: RpcClient }) {
   });
 
   const target = selectedDevice?.name ?? 'no device selected';
+  const displaySources = sources.map((source) =>
+    source.id === 'network' && networkStatus ? { ...source, available: networkStatus.available } : source);
   let screen: ReactNode;
   switch (active) {
     case 'logs':
       screen = createElement(LogsScreen, {
         entries,
-        sources,
+        sources: displaySources,
         sessions,
         activeSessionId,
         selectedSourceIndex,
         compact: columns < 120,
+        networkEntries,
         onSelectTab: (sessionId: string | null) => {
           setActiveSessionId(sessionId);
           if (sessionId) loadSession(sessionId);
@@ -1021,6 +1161,7 @@ function Dashboard({ client }: { client: RpcClient }) {
         onCloseTab: closeTab,
         onAttachSource: attachSource,
         onSelectSource: setSelectedSourceIndex,
+        onNetworkRow: showNetworkBody,
       });
       break;
     case 'metro':

@@ -47,6 +47,9 @@ importers:
       '@rnctl/plugin-metro':
         specifier: workspace:*
         version: link:../plugin-metro
+      '@rnctl/plugin-network':
+        specifier: workspace:*
+        version: link:../plugin-network
       '@rnctl/sdk':
         specifier: workspace:*
         version: link:../sdk
@@ -99,6 +102,12 @@ importers:
         version: link:../sdk
 
   packages/plugin-metro:
+    dependencies:
+      '@rnctl/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+
+  packages/plugin-network:
     dependencies:
       '@rnctl/sdk':
         specifier: workspace:*

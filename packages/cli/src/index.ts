@@ -5,6 +5,7 @@ import devices from '@rnctl/plugin-devices';
 import doctor from '@rnctl/plugin-doctor';
 import logs from '@rnctl/plugin-logs';
 import metro from '@rnctl/plugin-metro';
+import network from '@rnctl/plugin-network';
 import type { Logger } from '@rnctl/sdk';
 import { renderDashboard } from '@rnctl/tui';
 import { Command } from 'commander';
@@ -27,7 +28,7 @@ const logger: Logger = {
 async function main(): Promise<void> {
   const daemon = createDaemon(logger);
   let webServer: WebServer | undefined;
-  for (const plugin of [devices, metro, logs, doctor, broadcast]) {
+  for (const plugin of [devices, metro, logs, doctor, broadcast, network]) {
     await daemon.loader.load(plugin);
   }
   for (const plugin of await discoverPlugins()) {
