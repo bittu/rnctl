@@ -39,23 +39,29 @@ describe('plugin-storage', () => {
       } as unknown as PluginContext;
 
       await plugin.setup(ctx);
-      const sources = await rpcs.get('storage.sources')!.handler({ app: 'com.example.app', platform: 'ios' }) as {
-        sources: Array<{ kind: string; path: string; available: boolean }>;
-      };
-      const manifest = sources.sources.find((source) => source.kind === 'asyncstorage-json');
-      expect(manifest?.available).toBe(true);
+      const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+      try {
+        const sources = await rpcs.get('storage.sources')!.handler({ app: 'com.example.app', platform: 'ios' }) as {
+          sources: Array<{ kind: string; path: string; available: boolean }>;
+        };
+        const manifest = sources.sources.find((source) => source.kind === 'asyncstorage-json');
+        expect(manifest?.available).toBe(true);
 
-      const result = await rpcs.get('storage.read')!.handler({
-        app: 'com.example.app',
-        platform: 'ios',
-        source: manifest!.path,
-        kind: 'asyncstorage-json',
-        limit: 10,
-      }) as { entries: Array<{ key: string; value: string }> };
-      expect(result.entries).toEqual([
-        { key: 'token', value: 'abc' },
-        { key: 'theme', value: 'dark' },
-      ]);
+        const result = await rpcs.get('storage.read')!.handler({
+          app: 'com.example.app',
+          platform: 'ios',
+          source: manifest!.path,
+          kind: 'asyncstorage-json',
+          limit: 10,
+          terminate: false,
+        }) as { entries: Array<{ key: string; value: string }> };
+        expect(result.entries).toEqual([
+          { key: 'token', value: 'abc' },
+          { key: 'theme', value: 'dark' },
+        ]);
+      } finally {
+        platformSpy.mockRestore();
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -76,14 +82,18 @@ describe('plugin-storage', () => {
         registerCommand: vi.fn(),
       } as unknown as PluginContext;
       await plugin.setup(ctx);
-
-      const result = await rpcs.get('storage.write')!.handler({
-        app: 'com.example.app', platform: 'ios', source: path, kind: 'asyncstorage-json',
-        key: 'token', value: 'abc', confirm: true,
-      }) as { written: boolean };
-      expect(result.written).toBe(true);
-      expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ existing: 'yes', token: 'abc' });
-      expect(exec).toHaveBeenCalledWith('xcrun', ['simctl', 'terminate', 'booted', 'com.example.app']);
+      const platformSpy = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+      try {
+        const result = await rpcs.get('storage.write')!.handler({
+          app: 'com.example.app', platform: 'ios', source: path, kind: 'asyncstorage-json',
+          key: 'token', value: 'abc', confirm: true,
+        }) as { written: boolean };
+        expect(result.written).toBe(true);
+        expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ existing: 'yes', token: 'abc' });
+        expect(exec).toHaveBeenCalledWith('xcrun', ['simctl', 'terminate', 'booted', 'com.example.app']);
+      } finally {
+        platformSpy.mockRestore();
+      }
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

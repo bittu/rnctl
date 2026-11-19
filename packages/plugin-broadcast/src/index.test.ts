@@ -29,24 +29,31 @@ function setup() {
 }
 
 describe('plugin-broadcast', () => {
+  // iOS simulators are only discovered on macOS; CI runs on Ubuntu.
+  const expectedSent = process.platform === 'darwin' ? 2 : 1;
+
   it('opens a deep link on every booted device', async () => {
     const { ctx, rpcs, exec } = setup();
     await plugin.setup(ctx);
     const result = await rpcs.get('broadcast.deepLink')!.handler({ url: 'myapp://home' }) as { sent: number };
-    expect(result.sent).toBe(2);
+    expect(result.sent).toBe(expectedSent);
     expect(exec).toHaveBeenCalledWith('adb', [
       '-s', 'emulator-5554', 'shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', 'myapp://home',
     ]);
-    expect(exec).toHaveBeenCalledWith('xcrun', ['simctl', 'openurl', 'IOS-1', 'myapp://home']);
+    if (process.platform === 'darwin') {
+      expect(exec).toHaveBeenCalledWith('xcrun', ['simctl', 'openurl', 'IOS-1', 'myapp://home']);
+    }
   });
 
   it('toggles dark mode on every booted device', async () => {
     const { ctx, rpcs, exec } = setup();
     await plugin.setup(ctx);
     const result = await rpcs.get('broadcast.darkMode')!.handler({ enabled: true }) as { sent: number };
-    expect(result.sent).toBe(2);
+    expect(result.sent).toBe(expectedSent);
     expect(exec).toHaveBeenCalledWith('adb', ['-s', 'emulator-5554', 'shell', 'cmd', 'uimode', 'night', 'yes']);
-    expect(exec).toHaveBeenCalledWith('xcrun', ['simctl', 'ui', 'IOS-1', 'appearance', 'dark']);
+    if (process.platform === 'darwin') {
+      expect(exec).toHaveBeenCalledWith('xcrun', ['simctl', 'ui', 'IOS-1', 'appearance', 'dark']);
+    }
   });
 
   it('reloads Metro and Android apps', async () => {
