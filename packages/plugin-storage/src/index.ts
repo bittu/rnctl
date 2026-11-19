@@ -1,5 +1,5 @@
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { definePlugin, z, type PluginContext } from '@rnctl/sdk';
@@ -87,6 +87,24 @@ export default definePlugin({
       return stdout.split('\n').slice(1).map((line) => line.trim().split(/\s+/)[0]).find(Boolean);
     };
 
+    const terminateApp = async (app: string, platform: 'ios' | 'android', device?: string): Promise<void> => {
+      try {
+        if (platform === 'ios' && process.platform === 'darwin') {
+          await ctx.processes.exec('xcrun', ['simctl', 'terminate', 'booted', app]);
+        } else if (platform === 'android' && device) {
+          await ctx.processes.exec('adb', ['-s', device, 'shell', 'am', 'force-stop', app]);
+        }
+      } catch { /* app may not be running */ }
+    };
+
+    const backup = (path: string): string => {
+      const dir = join(homedir(), '.rnctl', 'backups');
+      mkdirSync(dir, { recursive: true });
+      const target = join(dir, `${Date.now()}-${path.split(/[\\/]/).pop() ?? 'store'}`);
+      copyFileSync(path, target);
+      return target;
+    };
+
     ctx.registerRpc('storage.apps', {
       inputSchema: z.object({}),
       handler: async () => {
@@ -159,12 +177,14 @@ export default definePlugin({
         source: z.string(),
         kind: z.enum(['asyncstorage-json', 'asyncstorage-sqlite', 'sqlite', 'mmkv']),
         limit: z.number().int().positive().default(100),
+        terminate: z.boolean().default(true),
       }),
-      handler: async ({ app, platform, source, kind, limit }) => {
+      handler: async ({ app, platform, source, kind, limit, terminate }) => {
         if (kind === 'mmkv') {
           return { available: false, reason: 'MMKV reading is not supported yet', entries: [] };
         }
         try {
+          if (terminate) await terminateApp(app, platform, platform === 'android' ? await firstDevice() : undefined);
           if (kind === 'asyncstorage-json') {
             const parsed = JSON.parse(readFileSync(source, 'utf8')) as Record<string, string>;
             return {
@@ -194,14 +214,85 @@ export default definePlugin({
       },
     });
 
-    for (const name of ['storage.write', 'storage.clear'] as const) {
-      ctx.registerRpc(name, {
-        inputSchema: z.object({ app: z.string(), source: z.string() }),
-        handler: async () => ({
-          available: false,
-          reason: 'Storage editing is not supported yet; the explorer is read-only',
-        }),
-      });
-    }
+    ctx.registerRpc('storage.write', {
+      inputSchema: z.object({
+        app: z.string(),
+        platform: z.enum(['ios', 'android']),
+        source: z.string(),
+        kind: z.enum(['asyncstorage-json', 'asyncstorage-sqlite', 'sqlite', 'mmkv']),
+        key: z.string(),
+        value: z.string(),
+        confirm: z.boolean().default(false),
+      }),
+      handler: async ({ app, platform, source, kind, key, value, confirm }) => {
+        if (!confirm) return { written: false, reason: 'Confirmation required: pass confirm: true' };
+        if (kind === 'mmkv') return { written: false, reason: 'MMKV writing is not supported' };
+
+        const scratch = mkdtempSync(join(tmpdir(), 'rnctl-storage-write-'));
+        const local = join(scratch, 'store');
+        try {
+          const device = platform === 'android' ? await firstDevice() : undefined;
+          if (platform === 'android' && !device) return { written: false, reason: 'No adb device' };
+          await terminateApp(app, platform, device);
+
+          if (platform === 'android') {
+            const staged = `/sdcard/rnctl-storage-write-${Date.now()}`;
+            await ctx.processes.exec('adb', ['-s', device!, 'shell', 'run-as', app, 'cp', source, staged]);
+            await ctx.processes.exec('adb', ['-s', device!, 'pull', staged, local]);
+            const pulled = `${local}.pulled`;
+            copyFileSync(local, pulled);
+            await ctx.processes.exec('adb', ['-s', device!, 'shell', 'rm', '-f', staged]);
+          } else {
+            copyFileSync(source, local);
+          }
+          backup(platform === 'ios' ? source : local);
+
+          if (kind === 'asyncstorage-json') {
+            const parsed = JSON.parse(readFileSync(local, 'utf8')) as Record<string, string>;
+            parsed[key] = value;
+            writeFileSync(local, JSON.stringify(parsed));
+          } else {
+            const db = new DatabaseSync(local);
+            try {
+              const table = ['Storage', 'catalystLocalStorage'].find((name) => {
+                try {
+                  db.prepare(`SELECT 1 FROM ${name} LIMIT 1`).get();
+                  return true;
+                } catch {
+                  return false;
+                }
+              });
+              if (!table) return { written: false, reason: 'Unknown SQLite schema' };
+              db.prepare(`INSERT INTO ${table} (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`)
+                .run(key, value);
+            } finally {
+              db.close();
+            }
+          }
+
+          if (platform === 'android') {
+            const staged = `/sdcard/rnctl-storage-write-${Date.now()}-out`;
+            await ctx.processes.exec('adb', ['-s', device!, 'push', local, staged]);
+            await ctx.processes.exec('adb', ['-s', device!, 'shell', 'run-as', app, 'cp', staged, source]);
+            await ctx.processes.exec('adb', ['-s', device!, 'shell', 'rm', '-f', staged]);
+          } else {
+            copyFileSync(local, source);
+          }
+          return { written: true, key };
+        } catch (error) {
+          return { written: false, reason: String(error) };
+        } finally {
+          rmSync(scratch, { recursive: true, force: true });
+        }
+      },
+    });
+
+    ctx.registerRpc('storage.clear', {
+      inputSchema: z.object({ app: z.string(), source: z.string() }),
+      handler: async () => ({
+        available: false,
+        reason: 'Clearing a whole store is not supported; use storage.write to change a key',
+      }),
+    });
   },
 });

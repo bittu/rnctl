@@ -24,7 +24,7 @@ type ScreenId = 'devices' | 'logs' | 'metro' | 'environment' | 'broadcast' | 'st
 type DeviceFilter = 'all' | 'ios' | 'android';
 type Platform = 'ios' | 'android';
 type MetroStatus = 'unknown' | 'running' | 'stopped';
-type PromptKind = 'installApp' | 'runApp' | 'deepLink';
+type PromptKind = 'installApp' | 'runApp' | 'deepLink' | 'storageEdit';
 interface Notice { text: string; tone: Tone }
 interface ActionResult { ok: boolean; message: string }
 interface BroadcastItem { id: string; platform: string; ok: boolean; message: string }
@@ -554,7 +554,7 @@ function BroadcastScreen({ summary, darkEnabled, prompt, promptValue, onReload, 
   );
 }
 
-function StorageScreen({ step, apps, appId, sources, sourceId, entries, entryKey, onSelectApp, onSelectSource, onSelectEntry }: {
+function StorageScreen({ step, apps, appId, sources, sourceId, entries, entryKey, prompt, promptValue, confirmWrite, onSelectApp, onSelectSource, onSelectEntry }: {
   step: number;
   apps: StorageApp[] | undefined;
   appId: string | null;
@@ -562,6 +562,9 @@ function StorageScreen({ step, apps, appId, sources, sourceId, entries, entryKey
   sourceId: string | null;
   entries: StorageEntry[];
   entryKey: string | null;
+  prompt: PromptKind | null;
+  promptValue: string;
+  confirmWrite: boolean;
   onSelectApp: (app: StorageApp) => void;
   onSelectSource: (source: StorageSourceInfo) => void;
   onSelectEntry: (entry: StorageEntry) => void;
@@ -582,8 +585,19 @@ function StorageScreen({ step, apps, appId, sources, sourceId, entries, entryKey
     t(label, { fg: active ? C.text : C[tone], shrink: true, truncate: true }),
     t(meta, { fg: C.muted, dim: true, shrink: true, truncate: true }),
   );
-  const list: ReactNode[] = step === 0
-    ? apps === undefined
+  const list: ReactNode[] = prompt === 'storageEdit'
+    ? confirmWrite
+      ? [
+        t(`Write key ${cut(entryKey ?? '', 28)}?`, { fg: C.warn, bold: true }),
+        t('y = confirm · N/esc = cancel', { fg: C.muted, dim: true }),
+      ]
+      : [
+        t(`Edit ${cut(entryKey ?? '', 28)}`, { fg: C.muted }),
+        t(`${cut(promptValue, 48)}▌`, { fg: C.text }),
+        t('Enter next · Esc cancel', { fg: C.muted, dim: true }),
+      ]
+    : step === 0
+      ? apps === undefined
       ? [t('Loading apps…', { fg: C.muted, dim: true })]
       : apps.length === 0
         ? [t('No apps found on booted devices.', { fg: C.muted, dim: true })]
@@ -641,7 +655,7 @@ function StorageScreen({ step, apps, appId, sources, sourceId, entries, entryKey
         { flexGrow: 1, flexBasis: 0, minHeight: 0, overflow: 'hidden', scrollY: true, scrollbarOptions: { visible: false, showArrows: false } },
         list,
       ),
-      t('Read-only · ↑↓ select · Enter open · Esc back', { fg: C.muted, dim: true, truncate: true }),
+      t('Writes require confirmation · original backed up', { fg: C.muted, dim: true, truncate: true }),
     ),
   );
 }
@@ -792,6 +806,7 @@ function Dashboard({ client }: { client: RpcClient }) {
   const [storageSource, setStorageSource] = useState<string | null>(null);
   const [storageEntries, setStorageEntries] = useState<StorageEntry[]>([]);
   const [storageEntryKey, setStorageEntryKey] = useState<string | null>(null);
+  const [confirmWrite, setConfirmWrite] = useState(false);
   const columns = renderer.width || 80;
 
   const refreshSources = (): void => {
@@ -868,9 +883,59 @@ function Dashboard({ client }: { client: RpcClient }) {
       });
   };
 
-  const showStorageValue = (entry: StorageEntry): void => {
+  const startStorageEdit = (entry: StorageEntry): void => {
     setStorageEntryKey(entry.key);
-    setNotice({ text: `${cut(entry.key, 24)} = ${entry.value.slice(0, 120)}`, tone: 'muted' });
+    setPromptValue(entry.value);
+    setConfirmWrite(false);
+    setPrompt('storageEdit');
+  };
+
+  const cancelStorageEdit = (): void => {
+    setPrompt(null);
+    setConfirmWrite(false);
+    setNotice({ text: 'Write cancelled', tone: 'muted' });
+  };
+
+  const submitStorageWrite = (): void => {
+    const app = storageApps?.find((candidate) => candidate.id === storageApp);
+    const source = storageSources?.find((candidate) => candidate.id === storageSource);
+    const key = storageEntryKey;
+    if (!app || !source || !key) { cancelStorageEdit(); return; }
+    void client.call<{ written: boolean; key?: string; reason?: string }>('storage.write', {
+      app: app.id,
+      platform: app.platform,
+      source: source.id,
+      kind: source.kind,
+      key,
+      value: promptValue,
+      confirm: true,
+    })
+      .then((result) => {
+        if (!mounted.current) return;
+        setPrompt(null);
+        setConfirmWrite(false);
+        setNotice({
+          text: result.written ? `Wrote ${result.key ?? key}` : (result.reason ?? 'Write refused'),
+          tone: result.written ? 'good' : 'bad',
+        });
+        if (!result.written) return;
+        void client.call<{ available: boolean; entries: StorageEntry[] }>('storage.read', {
+          app: app.id,
+          platform: app.platform,
+          source: source.id,
+          kind: source.kind,
+          limit: MAX_LOGS,
+          terminate: false,
+        })
+          .then((r) => { if (mounted.current && r.available) setStorageEntries(r.entries); })
+          .catch(() => { /* status already reported the write */ });
+      })
+      .catch((reason: unknown) => {
+        if (!mounted.current) return;
+        setPrompt(null);
+        setConfirmWrite(false);
+        setNotice({ text: `storage.write: ${reasonText(reason)}`, tone: 'bad' });
+      });
   };
 
   const loadNetwork = (): void => {
@@ -1213,6 +1278,18 @@ function Dashboard({ client }: { client: RpcClient }) {
     const name = key.name;
     if (prompt) {
       key.preventDefault();
+      if (prompt === 'storageEdit') {
+        if (confirmWrite) {
+          if (name === 'y' || name === 'Y') submitStorageWrite();
+          else if (name === 'n' || name === 'N' || name === 'escape' || name === 'esc') cancelStorageEdit();
+          return;
+        }
+        if (name === 'escape' || name === 'esc') cancelStorageEdit();
+        else if (name === 'return' || name === 'enter') setConfirmWrite(true);
+        else if (name === 'backspace') setPromptValue((current) => current.slice(0, -1));
+        else if (name.length === 1) setPromptValue((current) => current + (name === 'space' ? ' ' : name));
+        return;
+      }
       if (name === 'escape' || name === 'esc') {
         setPrompt(null);
         setNotice({ text: 'Cancelled', tone: 'muted' });
@@ -1306,7 +1383,7 @@ function Dashboard({ client }: { client: RpcClient }) {
           if (source) openStorageSource(source);
         } else {
           const entry = storageEntries.find((candidate) => candidate.key === storageEntryKey);
-          if (entry) showStorageValue(entry);
+          if (entry) startStorageEdit(entry);
         }
       }
       return;
@@ -1389,9 +1466,12 @@ function Dashboard({ client }: { client: RpcClient }) {
         sourceId: storageSource,
         entries: storageEntries,
         entryKey: storageEntryKey,
+        prompt,
+        promptValue,
+        confirmWrite,
         onSelectApp: (app) => { setStorageApp(app.id); openStorageApp(app); },
         onSelectSource: (source) => { setStorageSource(source.id); openStorageSource(source); },
-        onSelectEntry: showStorageValue,
+        onSelectEntry: startStorageEdit,
       });
       break;
     case 'broadcast':
