@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { definePlugin, z } from '@rnctl/sdk';
+import { listTargets, NUKE_TARGETS, previewNuke, runNuke, type NukeTargetId } from './nuke.js';
 
 export interface DoctorCheck {
   name: string;
@@ -101,11 +103,56 @@ export default definePlugin({
       },
     });
 
+    ctx.registerRpc('nuke.targets', {
+      inputSchema: z.object({}),
+      handler: async () => ({ targets: listTargets(process.cwd(), process.platform, homedir()) }),
+    });
+
+    ctx.registerRpc('nuke.preview', {
+      inputSchema: z.object({ targets: z.array(z.enum(NUKE_TARGETS)) }),
+      handler: async ({ targets }) => previewNuke(targets, process.cwd(), process.platform, homedir()),
+    });
+
+    ctx.registerRpc('nuke.run', {
+      inputSchema: z.object({
+        targets: z.array(z.enum(NUKE_TARGETS)),
+        confirm: z.boolean().default(false),
+      }),
+      handler: async ({ targets, confirm }) =>
+        runNuke(targets, confirm, ctx.processes, process.cwd(), process.platform, homedir()),
+    });
+
     ctx.registerCommand({
       name: 'nuke',
-      description: 'Clean caches and build artifacts',
-      action: async (_args, pluginCtx) => {
-        pluginCtx.logger.info('Cache cleanup is not implemented yet.');
+      description: 'Preview or clean caches (nuke [targets...] [--dry-run] [--yes])',
+      action: async (args, pluginCtx) => {
+        const requested = args.filter((arg): arg is NukeTargetId => NUKE_TARGETS.includes(arg as NukeTargetId));
+        if (requested.length === 0) {
+          for (const target of listTargets(process.cwd(), process.platform, homedir())) {
+            pluginCtx.logger.info(`${target.id.padEnd(14)} ${(target.sizeBytes / 1024 / 1024).toFixed(1)} MB  ${target.label}`);
+          }
+          return;
+        }
+
+        if (args.includes('--dry-run')) {
+          const plan = previewNuke(requested, process.cwd(), process.platform, homedir());
+          for (const removal of plan.removals) {
+            pluginCtx.logger.info(`would remove ${removal.path} (${(removal.sizeBytes / 1024 / 1024).toFixed(1)} MB)`);
+          }
+          for (const command of plan.commands) pluginCtx.logger.info(`would run ${command}`);
+          pluginCtx.logger.info(`total: ${(plan.totalBytes / 1024 / 1024).toFixed(1)} MB`);
+          return;
+        }
+
+        if (!args.includes('--yes')) {
+          pluginCtx.logger.warn('Refusing to delete without --yes. Use --dry-run to preview.');
+          return;
+        }
+
+        const result = await runNuke(requested, true, pluginCtx.processes, process.cwd(), process.platform, homedir());
+        for (const path of result.removed) pluginCtx.logger.info(`removed ${path}`);
+        for (const error of result.errors) pluginCtx.logger.error(error);
+        pluginCtx.logger.info(`reclaimed ${(result.reclaimedBytes / 1024 / 1024).toFixed(1)} MB`);
       },
     });
   },

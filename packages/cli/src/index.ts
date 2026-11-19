@@ -45,6 +45,7 @@ async function main(): Promise<void> {
       .command(command.name)
       .description(command.description)
       .argument('[args...]')
+      .allowUnknownOption()
       .action(async (args: string[]) => command.action(args, daemon.ctx));
   }
 
