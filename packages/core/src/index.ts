@@ -39,6 +39,7 @@ export function createDaemon(logger: Logger = defaultLogger): Daemon {
     logger,
     processes,
     registerRpc: (method, definition) => { rpcMethods.set(method, definition); },
+    getRpc: (method) => rpcMethods.get(method) as RpcMethod | undefined,
     registerCommand: (command) => { commands.set(command.name, command); },
   };
 

@@ -29,6 +29,7 @@
     "@rnctl/plugin-devices": "workspace:*",
     "@rnctl/plugin-doctor": "workspace:*",
     "@rnctl/plugin-logs": "workspace:*",
+    "@rnctl/plugin-mcp": "workspace:*",
     "@rnctl/plugin-metro": "workspace:*",
     "@rnctl/plugin-network": "workspace:*",
     "@rnctl/plugin-perf": "workspace:*",

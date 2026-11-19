@@ -94,6 +94,7 @@ export interface PluginContext {
   readonly logger: Logger;
   readonly processes: Processes;
   registerRpc<TInput, TOutput>(method: string, definition: RpcMethod<TInput, TOutput>): void;
+  getRpc(method: string): RpcMethod | undefined;
   registerCommand(command: CommandDefinition): void;
 }
 

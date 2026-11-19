@@ -4,6 +4,7 @@ import broadcast from '@rnctl/plugin-broadcast';
 import devices from '@rnctl/plugin-devices';
 import doctor from '@rnctl/plugin-doctor';
 import logs from '@rnctl/plugin-logs';
+import mcp from '@rnctl/plugin-mcp';
 import metro from '@rnctl/plugin-metro';
 import network from '@rnctl/plugin-network';
 import perf from '@rnctl/plugin-perf';
@@ -20,9 +21,12 @@ function openBrowser(url: string): void {
   child.unref();
 }
 
+// MCP speaks JSON-RPC on stdout; every diagnostic must go to stderr in that mode.
+const mcpMode = process.argv.includes('mcp');
+const output = mcpMode ? console.error : console.log;
 const logger: Logger = {
-  debug: (message) => { if (process.env.RNCTL_DEBUG) console.debug(message); },
-  info: (message) => console.log(message),
+  debug: (message) => { if (process.env.RNCTL_DEBUG) console.error(message); },
+  info: (message) => { output(message); },
   warn: (message) => console.warn(message),
   error: (message) => console.error(message),
 };
@@ -30,7 +34,7 @@ const logger: Logger = {
 async function main(): Promise<void> {
   const daemon = createDaemon(logger);
   let webServer: WebServer | undefined;
-  for (const plugin of [devices, metro, logs, doctor, broadcast, network, storage, perf]) {
+  for (const plugin of [devices, metro, logs, doctor, broadcast, network, storage, perf, mcp]) {
     await daemon.loader.load(plugin);
   }
   for (const plugin of await discoverPlugins()) {
